@@ -4,3 +4,4 @@ stock_journal.db
 .venv/
 venv/
 *.pdf
+*.xlsx
