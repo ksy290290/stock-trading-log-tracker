@@ -82,6 +82,16 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS holding_notes (
+            ticker TEXT PRIMARY KEY,
+            market TEXT NOT NULL,
+            note TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -197,6 +207,26 @@ def update_dividend_ticker(dividend_id, ticker, name, market):
     conn.execute(
         "UPDATE dividends SET ticker = ?, name = ?, market = ? WHERE id = ?",
         (ticker, name, market, dividend_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_holding_notes():
+    """{ticker: note} for every holding that has a saved 비고."""
+    conn = get_conn()
+    rows = conn.execute("SELECT ticker, note FROM holding_notes").fetchall()
+    conn.close()
+    return {r["ticker"]: r["note"] for r in rows}
+
+
+def set_holding_note(ticker, market, note):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO holding_notes (ticker, market, note, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(ticker) DO UPDATE SET market = excluded.market, note = excluded.note,
+                                              updated_at = excluded.updated_at""",
+        (ticker, market, note, datetime.now().isoformat()),
     )
     conn.commit()
     conn.close()

@@ -49,10 +49,14 @@ st.markdown(
     .jnl-table td {
         padding: 5px 10px;
         border-bottom: 1px solid #eeeeee;
+        white-space: nowrap;
     }
     .jnl-table-scroll {
         max-height: 480px;
         overflow-y: auto;
+    }
+    .jnl-table-wrap {
+        overflow-x: auto;
     }
     </style>
     """,
@@ -88,11 +92,12 @@ def fmt_qty(x):
 
 def render_table(df, scroll=False):
     """검정/볼드 컬럼명을 보장하기 위해 st.dataframe 대신 스타일링된 HTML 표로 렌더링.
-    (st.dataframe은 캔버스로 그려져서 CSS로 헤더 스타일을 바꿀 수 없음)"""
+    (st.dataframe은 캔버스로 그려져서 CSS로 헤더 스타일을 바꿀 수 없음)
+    행이 줄바꿈되지 않게 해서(white-space: nowrap) 국내/해외 표의 행 높이가 맞도록 함."""
     html = df.to_html(index=False, escape=True, border=0, classes="jnl-table")
     if scroll:
         html = f'<div class="jnl-table-scroll">{html}</div>'
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(f'<div class="jnl-table-wrap">{html}</div>', unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=300)
@@ -164,7 +169,9 @@ with tab_dashboard:
         c5.metric("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-")
 
         st.subheader("보유 종목")
+        holding_notes = db.get_holding_notes()
         holdings_kr, holdings_us = [], []
+        all_holdings = []  # for the 비고 edit picker below
         for ticker, pos in positions.items():
             if pos["qty"] <= 0:
                 continue
@@ -189,8 +196,10 @@ with tab_dashboard:
                 "평가금": fmt(eval_amount),
                 "평가손익": fmt(pnl) if pnl is not None else "-",
                 "평가손익(%)": f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-",
+                "비고": holding_notes.get(ticker) or "",
             }
             (holdings_kr if pos["market"] == "KR" else holdings_us).append(entry)
+            all_holdings.append((pos["market"], ticker, pos["name"] or ticker))
 
         def render_holdings(label, entries):
             st.markdown(f"**{label}**")
@@ -205,6 +214,25 @@ with tab_dashboard:
 
         render_holdings("🇰🇷 국내", holdings_kr)
         render_holdings("🇺🇸 해외 (USD 기준)", holdings_us)
+
+        with st.expander("✏️ 비고 작성/수정"):
+            note_options = {
+                f"{'🇰🇷' if m == 'KR' else '🇺🇸'} {n} ({tk})": (tk, m) for m, tk, n in sorted(all_holdings)
+            }
+            if note_options:
+                note_label = st.selectbox("종목 선택", list(note_options.keys()), key="holding_note_select")
+                sel_ticker, sel_market = note_options[note_label]
+                note_value = st.text_input(
+                    "비고 (예: %별 판매 예약 완료 (260914))",
+                    value=holding_notes.get(sel_ticker, ""),
+                    key=f"note_input_{sel_ticker}",
+                )
+                if st.button("저장", key="save_holding_note"):
+                    db.set_holding_note(sel_ticker, sel_market, note_value.strip())
+                    st.success("저장했습니다.")
+                    st.rerun()
+            else:
+                st.caption("보유 종목이 없습니다.")
 
         st.subheader("목표가 진행률")
         targets = db.get_targets(active_only=True)
