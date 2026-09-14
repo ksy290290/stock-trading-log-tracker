@@ -63,10 +63,17 @@ def init_db():
             ticker TEXT,
             title TEXT NOT NULL,
             content TEXT,
+            category TEXT DEFAULT 'note',  -- 'note' (개인 노트) or 'ai_insight' (Claude가 조사해서 저장)
+            source_url TEXT,
             created_at TEXT NOT NULL
         )
         """
     )
+    existing_journal_cols = {row["name"] for row in cur.execute("PRAGMA table_info(journal)").fetchall()}
+    if "category" not in existing_journal_cols:
+        cur.execute("ALTER TABLE journal ADD COLUMN category TEXT DEFAULT 'note'")
+    if "source_url" not in existing_journal_cols:
+        cur.execute("ALTER TABLE journal ADD COLUMN source_url TEXT")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS dividends (
@@ -160,19 +167,25 @@ def deactivate_target(target_id):
     conn.close()
 
 
-def add_journal(entry_date, ticker, title, content):
+def add_journal(entry_date, ticker, title, content, category="note", source_url=None):
     conn = get_conn()
     conn.execute(
-        "INSERT INTO journal (entry_date, ticker, title, content, created_at) VALUES (?, ?, ?, ?, ?)",
-        (entry_date, ticker, title, content, datetime.now().isoformat()),
+        """INSERT INTO journal (entry_date, ticker, title, content, category, source_url, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (entry_date, ticker, title, content, category, source_url, datetime.now().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def get_journal():
+def get_journal(category=None):
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM journal ORDER BY entry_date DESC, id DESC").fetchall()
+    if category:
+        rows = conn.execute(
+            "SELECT * FROM journal WHERE category = ? ORDER BY entry_date DESC, id DESC", (category,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM journal ORDER BY entry_date DESC, id DESC").fetchall()
     conn.close()
     return rows
 

@@ -1,10 +1,12 @@
+import calendar as calendar_module
+import concurrent.futures
 import datetime as dt
+import html
 from collections import defaultdict
 
 import altair as alt
 import pandas as pd
 import streamlit as st
-from streamlit_calendar import calendar as st_calendar
 
 import db
 import price_data
@@ -58,6 +60,67 @@ st.markdown(
     .jnl-table-wrap {
         overflow-x: auto;
     }
+    .holdings-table {
+        width: auto !important;
+    }
+    .holdings-table td, .holdings-table th {
+        padding: 3px 8px !important;
+    }
+    /* 국내/해외 표가 서로 같은 컬럼 순서를 쓰므로, 폭을 고정해 두 표가 같은 크기로 정렬되게 함 */
+    .holdings-table th:nth-child(1), .holdings-table td:nth-child(1) { min-width: 200px; }
+    .holdings-table th:nth-child(2), .holdings-table td:nth-child(2) { min-width: 70px; }
+    .holdings-table th:nth-child(3), .holdings-table td:nth-child(3) { min-width: 70px; }
+    .holdings-table th:nth-child(4), .holdings-table td:nth-child(4) { min-width: 90px; }
+    .holdings-table th:nth-child(5), .holdings-table td:nth-child(5) { min-width: 90px; }
+    .holdings-table th:nth-child(6), .holdings-table td:nth-child(6) { min-width: 100px; }
+    .holdings-table th:nth-child(7), .holdings-table td:nth-child(7) { min-width: 100px; }
+    .holdings-table th:nth-child(8), .holdings-table td:nth-child(8) { min-width: 100px; }
+    .holdings-table td:last-child, .holdings-table th:last-child {
+        min-width: 240px;
+    }
+    .cal-grid {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    .cal-grid th {
+        background-color: #f7f7f7;
+        color: #000000 !important;
+        font-weight: 700 !important;
+        padding: 6px;
+        border: 1px solid #ddd;
+        text-align: center;
+    }
+    .cal-grid td {
+        vertical-align: top;
+        border: 1px solid #eee;
+        height: 92px;
+        padding: 4px;
+        font-size: 0.72rem;
+        overflow: hidden;
+    }
+    .cal-grid td.cal-dim {
+        background-color: #fafafa;
+        color: #bbbbbb;
+    }
+    .cal-daynum {
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+    .cal-event {
+        color: #ffffff;
+        border-radius: 3px;
+        padding: 0px 4px;
+        margin-bottom: 1px;
+        font-size: 0.68rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .cal-more {
+        font-size: 0.68rem;
+        color: #888888;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -90,11 +153,12 @@ def fmt_qty(x):
     return f"{x:,.4f}".rstrip("0").rstrip(".")
 
 
-def render_table(df, scroll=False):
+def render_table(df, scroll=False, extra_class=""):
     """검정/볼드 컬럼명을 보장하기 위해 st.dataframe 대신 스타일링된 HTML 표로 렌더링.
     (st.dataframe은 캔버스로 그려져서 CSS로 헤더 스타일을 바꿀 수 없음)
     행이 줄바꿈되지 않게 해서(white-space: nowrap) 국내/해외 표의 행 높이가 맞도록 함."""
-    html = df.to_html(index=False, escape=True, border=0, classes="jnl-table")
+    classes = f"jnl-table {extra_class}".strip()
+    html = df.to_html(index=False, escape=True, border=0, classes=classes)
     if scroll:
         html = f'<div class="jnl-table-scroll">{html}</div>'
     st.markdown(f'<div class="jnl-table-wrap">{html}</div>', unsafe_allow_html=True)
@@ -135,8 +199,8 @@ def suggest_name(ticker_raw, market):
     return TICKER_NAME_MAP.get(ticker, "")
 
 
-tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
-    ["📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석"]
+tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf, tab_ai = st.tabs(
+    ["📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석", "🤖 AI 인사이트"]
 )
 
 # ---------------------------------------------------------------------------
@@ -171,7 +235,6 @@ with tab_dashboard:
         st.subheader("보유 종목")
         holding_notes = db.get_holding_notes()
         holdings_kr, holdings_us = [], []
-        all_holdings = []  # for the 비고 edit picker below
         for ticker, pos in positions.items():
             if pos["qty"] <= 0:
                 continue
@@ -188,6 +251,8 @@ with tab_dashboard:
             pnl_pct = (price / avg_cost - 1) * 100 if price is not None and avg_cost else None
             entry = {
                 "eval_amount": eval_amount,
+                "market": pos["market"],
+                "ticker": ticker,
                 "종목": pos["name"] or ticker,
                 "티커": ticker,
                 "수량": fmt_qty(pos["qty"]),
@@ -199,25 +264,27 @@ with tab_dashboard:
                 "비고": holding_notes.get(ticker) or "",
             }
             (holdings_kr if pos["market"] == "KR" else holdings_us).append(entry)
-            all_holdings.append((pos["market"], ticker, pos["name"] or ticker))
 
         def render_holdings(label, entries):
             st.markdown(f"**{label}**")
             if not entries:
                 st.caption("보유 종목 없음")
-                return
+                return []
             entries_sorted = sorted(
                 entries, key=lambda e: e["eval_amount"] if e["eval_amount"] is not None else -1, reverse=True
             )
-            df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount"])
-            render_table(df)
+            df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount", "market", "ticker"])
+            render_table(df, extra_class="holdings-table")
+            return entries_sorted
 
-        render_holdings("🇰🇷 국내", holdings_kr)
-        render_holdings("🇺🇸 해외 (USD 기준)", holdings_us)
+        kr_sorted = render_holdings("🇰🇷 국내", holdings_kr)
+        us_sorted = render_holdings("🇺🇸 해외 (USD 기준)", holdings_us)
 
         with st.expander("✏️ 비고 작성/수정"):
+            # 평가금 내림차순 (위 표와 같은 순서): 국내 먼저, 그다음 해외
             note_options = {
-                f"{'🇰🇷' if m == 'KR' else '🇺🇸'} {n} ({tk})": (tk, m) for m, tk, n in sorted(all_holdings)
+                f"{'🇰🇷' if e['market'] == 'KR' else '🇺🇸'} {e['종목']} ({e['ticker']})": (e["ticker"], e["market"])
+                for e in kr_sorted + us_sorted
             }
             if note_options:
                 note_label = st.selectbox("종목 선택", list(note_options.keys()), key="holding_note_select")
@@ -265,7 +332,7 @@ with tab_calendar:
 
     cal_trades = db.get_trades()
     cal_dividends = db.get_dividends()
-    events = []
+    events_by_date = defaultdict(list)  # date_str -> [(text, color)]
 
     # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
     trade_groups = defaultdict(lambda: {"qty": 0.0, "name": None})
@@ -276,7 +343,7 @@ with tab_calendar:
     for (cdate, cticker, cside), g in trade_groups.items():
         label = "매수" if cside == "BUY" else "매도"
         color = "#3D9DF3" if cside == "BUY" else "#FF6C6C"
-        events.append({"title": f"{label} {g['name']} {fmt_qty(g['qty'])}", "start": cdate, "color": color})
+        events_by_date[cdate].append((f"{label} {g['name']} {fmt_qty(g['qty'])}", color))
 
     # 배당 (같은 날짜/티커 합산)
     div_groups = defaultdict(lambda: {"amount": 0.0, "name": None})
@@ -285,7 +352,7 @@ with tab_calendar:
         div_groups[key]["amount"] += d["amount"]
         div_groups[key]["name"] = d["name"] or d["ticker"]
     for (cdate, cticker), g in div_groups.items():
-        events.append({"title": f"배당 {g['name']} {fmt(g['amount'])}원", "start": cdate, "color": "#3DD56D"})
+        events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#3DD56D"))
 
     # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
     cal_positions = compute_positions(cal_trades) if cal_trades else {}
@@ -296,24 +363,58 @@ with tab_calendar:
         d = price_data.get_next_earnings_date_us(ticker)
         return d.isoformat() if d else None
 
-    for eticker in us_tickers:
-        edate = cached_earnings_date(eticker)
-        if edate:
-            ename = cal_positions[eticker]["name"] or eticker
-            events.append({"title": f"실적발표 {ename}", "start": edate, "color": "#B073FF"})
+    if us_tickers:
+        with st.spinner(f"실적발표 일정 조회 중... ({len(us_tickers)}개 종목)"):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_ticker = {executor.submit(cached_earnings_date, t): t for t in us_tickers}
+                for future in concurrent.futures.as_completed(future_to_ticker):
+                    eticker = future_to_ticker[future]
+                    edate = future.result()
+                    if edate:
+                        ename = cal_positions[eticker]["name"] or eticker
+                        events_by_date[edate].append((f"실적발표 {ename}", "#B073FF"))
 
-    if not events:
-        st.info("표시할 일정이 없습니다.")
-    else:
-        st_calendar(
-            events=events,
-            options={
-                "initialView": "dayGridMonth",
-                "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,listMonth"},
-                "height": 700,
-            },
-            key="main_calendar",
-        )
+    if "cal_year" not in st.session_state:
+        _today = dt.date.today()
+        st.session_state.cal_year = _today.year
+        st.session_state.cal_month = _today.month
+
+    col_prev, col_title, col_next = st.columns([1, 4, 1])
+    if col_prev.button("◀ 이전달"):
+        m, y = st.session_state.cal_month - 1, st.session_state.cal_year
+        if m < 1:
+            m, y = 12, y - 1
+        st.session_state.cal_month, st.session_state.cal_year = m, y
+        st.rerun()
+    col_title.markdown(f"### {st.session_state.cal_year}년 {st.session_state.cal_month}월")
+    if col_next.button("다음달 ▶"):
+        m, y = st.session_state.cal_month + 1, st.session_state.cal_year
+        if m > 12:
+            m, y = 1, y + 1
+        st.session_state.cal_month, st.session_state.cal_year = m, y
+        st.rerun()
+
+    _cal = calendar_module.Calendar(firstweekday=6)  # 일요일 시작
+    _weeks = _cal.monthdatescalendar(st.session_state.cal_year, st.session_state.cal_month)
+    _rows = ['<table class="cal-grid">']
+    _rows.append("<tr>" + "".join(f"<th>{d}</th>" for d in ["일", "월", "화", "수", "목", "금", "토"]) + "</tr>")
+    for week in _weeks:
+        _rows.append("<tr>")
+        for day in week:
+            in_month = day.month == st.session_state.cal_month
+            evs = events_by_date.get(day.isoformat(), [])
+            cell_class = "cal-dim" if not in_month else ""
+            ev_html = "".join(
+                f'<div class="cal-event" style="background:{c}" title="{html.escape(t)}">{html.escape(t)}</div>'
+                for t, c in evs[:4]
+            )
+            if len(evs) > 4:
+                ev_html += f'<div class="cal-more">+{len(evs) - 4}건 더</div>'
+            _rows.append(f'<td class="{cell_class}"><div class="cal-daynum">{day.day}</div>{ev_html}</td>')
+        _rows.append("</tr>")
+    _rows.append("</table>")
+    st.markdown("".join(_rows), unsafe_allow_html=True)
+
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
         "국내 종목 실적발표는 자동 조회 소스가 없어 표시되지 않습니다."
@@ -386,7 +487,7 @@ with tab_trades:
         df["tax"] = df["tax"].apply(fmt)
         render_table(
             df[
-                ["id", "trade_date", "market", "ticker", "name", "side", "quantity", "price",
+                ["id", "trade_date", "side", "market", "ticker", "name", "quantity", "price",
                  "fee", "tax", "strategy_tag", "thesis"]
             ],
             scroll=True,
@@ -602,7 +703,7 @@ with tab_journal:
                 st.rerun()
 
     st.subheader("노트 목록")
-    entries = db.get_journal()
+    entries = db.get_journal(category="note")
     for e in entries:
         ticker_label = e["ticker"]
         if ticker_label and TICKER_NAME_MAP.get(ticker_label):
@@ -671,7 +772,7 @@ with tab_perf:
                 alt.Chart(chart_df)
                 .mark_line(point=True)
                 .encode(
-                    x=alt.X("날짜:O", title="날짜"),
+                    x=alt.X("날짜:O", title="날짜", axis=alt.Axis(labelAngle=-45)),
                     y=alt.Y("누적실현손익:Q", title="누적실현손익", axis=alt.Axis(format=",.0f")),
                     tooltip=[
                         alt.Tooltip("날짜:O", title="날짜"),
@@ -683,3 +784,27 @@ with tab_perf:
             st.altair_chart(chart, use_container_width=True)
         else:
             st.caption("매도 기록이 없어 실현손익 추이를 표시할 수 없습니다.")
+
+# ---------------------------------------------------------------------------
+# AI 인사이트 (Claude가 조사해서 저장한 뉴스/공시/리서치)
+# ---------------------------------------------------------------------------
+with tab_ai:
+    st.subheader("AI 인사이트")
+    st.caption(
+        "채팅에서 Claude에게 \"이번주 보유종목 이슈 정리해줘\" 같이 요청하면, "
+        "찾은 뉴스·공시·리서치 내용을 정리해서 여기에 저장해줍니다."
+    )
+
+    ai_entries = db.get_journal(category="ai_insight")
+    if not ai_entries:
+        st.info("아직 저장된 AI 인사이트가 없습니다. 채팅에서 요청해보세요.")
+    else:
+        for e in ai_entries:
+            ticker_label = e["ticker"]
+            if ticker_label and TICKER_NAME_MAP.get(ticker_label):
+                ticker_label = f"{TICKER_NAME_MAP[ticker_label]} ({ticker_label})"
+            header = f"[{e['entry_date']}] {e['title']}" + (f" · {ticker_label}" if ticker_label else "")
+            with st.expander(header):
+                st.write(e["content"])
+                if e["source_url"]:
+                    st.markdown(f"[출처 링크]({e['source_url']})")
