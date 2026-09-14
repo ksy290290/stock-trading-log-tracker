@@ -145,12 +145,28 @@ def extract_rows(pdf_path):
     return rows
 
 
+FX_IN_NAME_RE = re.compile(r"[\d,]+\.\d{2}(?=\(|$)")
+
+
 def parse_name_code(name_raw):
     cleaned = re.sub(r"\s+[\d,]+\.\d{2}(?=\(|$)", "", name_raw).strip()
     m = re.search(r"^(.*?)\(([A-Za-z0-9]+)\)$", cleaned)
     if m:
         return m.group(1).strip(), m.group(2)
     return cleaned, None
+
+
+def extract_fx_from_name(name_raw):
+    """The 환율 column's value almost always lands inside the name zone on the
+    page (its x0 sits left of the column boundary even though it right-aligns
+    to the 환율 header), so it never gets classified as a separate numeric
+    field - it shows up embedded in name_raw instead, e.g. "...ETF
+    1,429.90(US25459W4583)" or "알파벳 A(US02079K3059) 1,469.40". Recover it
+    from there."""
+    m = FX_IN_NAME_RE.search(name_raw)
+    if m:
+        return float(m.group(0).replace(",", ""))
+    return None
 
 
 def classify(code, name):
@@ -179,6 +195,7 @@ def build_trades(rows):
                 "price": num(r.get("unit_price")),
                 "fee": num(r.get("fee")),
                 "tax": num(r.get("tax")),
+                "fx_rate": num(r.get("fx")) if r.get("fx") else extract_fx_from_name(r["name_raw"]),
                 "trade_date": r["date"].replace(".", "-"),
             }
         )
@@ -266,7 +283,7 @@ def main():
             skipped_t += 1
             continue
         db.add_trade(t["ticker"], t["name"], t["market"], t["side"], t["quantity"], t["price"],
-                     t["fee"], t["trade_date"], None, None, t["tax"])
+                     t["fee"], t["trade_date"], None, None, t["tax"], t["fx_rate"])
         inserted_t += 1
 
     inserted_d = skipped_d = 0

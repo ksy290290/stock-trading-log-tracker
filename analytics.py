@@ -22,7 +22,14 @@ def _sorted_trades(trades):
 
 
 def compute_positions(trades):
-    """Returns {ticker: {name, market, qty, avg_cost, realized_pnl, sell_records:[...]}}"""
+    """Returns {ticker: {name, market, qty, avg_cost, avg_cost_usd, realized_pnl, sell_records:[...]}}
+
+    avg_cost is always in KRW. avg_cost_usd is only meaningful for market=="US"
+    positions with fx_rate recorded on their BUY trades (Toss's own statement
+    conversion rate at execution time) - it lets US holdings be shown in their
+    native currency instead of round-tripping through today's FX rate, which
+    would mix in currency movement and no longer match what Toss itself shows.
+    """
     state = {}
     for t in _sorted_trades(trades):
         key = t["ticker"]
@@ -32,14 +39,23 @@ def compute_positions(trades):
                 "market": t["market"],
                 "qty": 0.0,
                 "avg_cost": 0.0,
+                "avg_cost_usd": 0.0,
                 "realized_pnl": 0.0,
                 "sell_records": [],
             }
         pos = state[key]
         if t["side"] == "BUY":
             total_cost = pos["qty"] * pos["avg_cost"] + t["quantity"] * t["price"] + (t["fee"] or 0)
+            fx = t["fx_rate"] if t["market"] == "US" else None
+            if fx:
+                price_usd = t["price"] / fx
+                fee_usd = (t["fee"] or 0) / fx
+                total_cost_usd = pos["qty"] * pos["avg_cost_usd"] + t["quantity"] * price_usd + fee_usd
+            else:
+                total_cost_usd = pos["avg_cost_usd"] * pos["qty"]
             pos["qty"] += t["quantity"]
             pos["avg_cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
+            pos["avg_cost_usd"] = total_cost_usd / pos["qty"] if pos["qty"] else 0.0
         else:  # SELL
             pnl = (t["price"] - pos["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
             pos["realized_pnl"] += pnl

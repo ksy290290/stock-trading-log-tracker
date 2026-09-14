@@ -167,17 +167,27 @@ with tab_dashboard:
         for ticker, pos in positions.items():
             if pos["qty"] <= 0:
                 continue
-            price = price_lookup.get(ticker)
+            if pos["market"] == "US":
+                # 해외는 원화 환산 없이 달러 그대로 (평단가도 달러 기준으로 추적됨) -
+                # 오늘 환율을 곱해 KRW로 바꾸면 환율 변동분이 섞여 토스 앱 수치와 어긋남
+                price = cached_price(ticker, "US")
+                avg_cost = pos["avg_cost_usd"]
+            else:
+                price = price_lookup.get(ticker)
+                avg_cost = pos["avg_cost"]
             eval_amount = price * pos["qty"] if price is not None else None
+            pnl = (price - avg_cost) * pos["qty"] if price is not None else None
+            pnl_pct = (price / avg_cost - 1) * 100 if price is not None and avg_cost else None
             entry = {
                 "eval_amount": eval_amount,
                 "종목": pos["name"] or ticker,
                 "티커": ticker,
                 "수량": fmt_qty(pos["qty"]),
-                "평단가": fmt(pos["avg_cost"]),
+                "평단가": fmt(avg_cost),
                 "현재가": fmt(price) if price is not None else "조회 실패",
                 "평가금": fmt(eval_amount),
-                "평가손익": fmt((price - pos["avg_cost"]) * pos["qty"]) if price is not None else "-",
+                "평가손익": fmt(pnl) if pnl is not None else "-",
+                "평가손익(%)": f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-",
             }
             (holdings_kr if pos["market"] == "KR" else holdings_us).append(entry)
 
@@ -192,11 +202,8 @@ with tab_dashboard:
             df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount"])
             render_table(df)
 
-        col_kr, col_us = st.columns(2)
-        with col_kr:
-            render_holdings("🇰🇷 국내", holdings_kr)
-        with col_us:
-            render_holdings("🇺🇸 해외", holdings_us)
+        render_holdings("🇰🇷 국내", holdings_kr)
+        render_holdings("🇺🇸 해외 (USD 기준)", holdings_us)
 
         st.subheader("목표가 진행률")
         targets = db.get_targets(active_only=True)
@@ -229,17 +236,21 @@ with tab_trades:
     col_m, col_tk = st.columns(2)
     market = col_m.selectbox("시장", MARKETS, format_func=market_label, key="trade_market_outer")
     ticker = col_tk.text_input("티커/종목코드 (예: 005930, AAPL)", key="trade_ticker_outer")
+    currency = "USD" if market == "US" else "원"
+    if market == "US":
+        st.caption("해외 종목은 체결가/수수료/거래세를 달러(USD) 기준으로 입력하세요 (원화는 자동 환산).")
+
     with st.form("trade_form", clear_on_submit=True):
         name = st.text_input("종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(ticker, market))
 
         col4, col5, col6 = st.columns(3)
         side = col4.selectbox("구분", ["BUY", "SELL"], format_func=lambda s: "매수" if s == "BUY" else "매도")
         quantity = col5.number_input("수량", min_value=0.0, step=1.0)
-        price = col6.number_input("체결가", min_value=0.0, step=1.0)
+        price = col6.number_input(f"체결가 ({currency})", min_value=0.0, step=1.0)
 
         col7, col8 = st.columns(2)
-        fee = col7.number_input("수수료", min_value=0.0, step=0.1, value=0.0)
-        tax = col8.number_input("거래세 (매도 시)", min_value=0.0, step=0.1, value=0.0)
+        fee = col7.number_input(f"수수료 ({currency})", min_value=0.0, step=0.1, value=0.0)
+        tax = col8.number_input(f"거래세 (매도 시, {currency})", min_value=0.0, step=0.1, value=0.0)
         trade_date = st.date_input("거래일", value=dt.date.today())
         strategy_tag = st.text_input("전략/태그 (선택)")
 
@@ -249,18 +260,25 @@ with tab_trades:
             if not ticker or quantity <= 0 or price <= 0:
                 st.error("티커, 수량, 체결가는 필수입니다.")
             else:
+                fx_rate = None
+                price_krw, fee_krw, tax_krw = price, fee, tax
+                if market == "US":
+                    fx_rate = cached_usdkrw()
+                    if fx_rate:
+                        price_krw, fee_krw, tax_krw = price * fx_rate, fee * fx_rate, tax * fx_rate
                 db.add_trade(
                     ticker.strip().upper() if market == "US" else ticker.strip(),
                     name.strip() or None,
                     market,
                     side,
                     quantity,
-                    price,
-                    fee,
+                    price_krw,
+                    fee_krw,
                     trade_date.isoformat(),
                     strategy_tag.strip() or None,
                     thesis.strip() or None,
-                    tax,
+                    tax_krw,
+                    fx_rate,
                 )
                 st.success("기록을 추가했습니다.")
                 st.rerun()
