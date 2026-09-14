@@ -58,3 +58,19 @@ def get_current_price(ticker: str, market: str):
 def get_usdkrw_rate():
     """1 USD 당 원화 환율. 실패 시 None."""
     return get_price_us("KRW=X")
+
+
+def get_next_earnings_date_us(ticker: str):
+    """다음 실적발표일 (US 종목만 - yfinance 제공). 실패/없음 시 None.
+    Returns a datetime.date or None."""
+    try:
+        import yfinance as yf
+
+        t = yf.Ticker(ticker)
+        cal = t.calendar
+        dates = cal.get("Earnings Date") if isinstance(cal, dict) else None
+        if not dates:
+            return None
+        return dates[0]
+    except Exception:
+        return None

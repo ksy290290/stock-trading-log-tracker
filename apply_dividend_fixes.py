@@ -21,12 +21,21 @@ df = pd.read_excel(args.xlsx_path, sheet_name="UNKNOWN 배당금")
 
 updates = []
 for _, row in df.iterrows():
-    ticker = str(row.get("정확한_티커") or "").strip()
-    if not ticker or ticker.lower() == "nan":
+    raw_ticker = row.get("정확한_티커")
+    if pd.isna(raw_ticker):
+        continue
+    # Excel이 종목코드를 숫자로 인식하면 앞자리 0이 날아감 (예: 091170 -> 91170)
+    if isinstance(raw_ticker, float) and raw_ticker.is_integer():
+        ticker = str(int(raw_ticker))
+    else:
+        ticker = str(raw_ticker).strip()
+    if not ticker:
         continue
     market = str(row.get("시장(KR/US)") or "KR").strip().upper()
     if market not in ("KR", "US"):
         market = "KR"
+    if market == "KR" and ticker.isdigit():
+        ticker = ticker.zfill(6)
     ticker = ticker.upper() if market == "US" else ticker
     name = str(row.get("정확한_종목명") or "").strip()
     updates.append(

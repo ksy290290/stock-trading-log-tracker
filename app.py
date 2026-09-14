@@ -4,6 +4,7 @@ from collections import defaultdict
 import altair as alt
 import pandas as pd
 import streamlit as st
+from streamlit_calendar import calendar as st_calendar
 
 import db
 import price_data
@@ -129,8 +130,8 @@ def suggest_name(ticker_raw, market):
     return TICKER_NAME_MAP.get(ticker, "")
 
 
-tab_dashboard, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
-    ["📊 대시보드", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석"]
+tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
+    ["📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석"]
 )
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,68 @@ with tab_dashboard:
             f"<div style='text-align:right; color:gray; font-size:0.85em;'>{rate_text}</div>",
             unsafe_allow_html=True,
         )
+
+# ---------------------------------------------------------------------------
+# 캘린더
+# ---------------------------------------------------------------------------
+with tab_calendar:
+    st.subheader("매매 · 배당 · 실적발표 캘린더")
+
+    cal_trades = db.get_trades()
+    cal_dividends = db.get_dividends()
+    events = []
+
+    # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
+    trade_groups = defaultdict(lambda: {"qty": 0.0, "name": None})
+    for t in cal_trades:
+        key = (t["trade_date"], t["ticker"], t["side"])
+        trade_groups[key]["qty"] += t["quantity"]
+        trade_groups[key]["name"] = t["name"] or t["ticker"]
+    for (cdate, cticker, cside), g in trade_groups.items():
+        label = "매수" if cside == "BUY" else "매도"
+        color = "#3D9DF3" if cside == "BUY" else "#FF6C6C"
+        events.append({"title": f"{label} {g['name']} {fmt_qty(g['qty'])}", "start": cdate, "color": color})
+
+    # 배당 (같은 날짜/티커 합산)
+    div_groups = defaultdict(lambda: {"amount": 0.0, "name": None})
+    for d in cal_dividends:
+        key = (d["pay_date"], d["ticker"])
+        div_groups[key]["amount"] += d["amount"]
+        div_groups[key]["name"] = d["name"] or d["ticker"]
+    for (cdate, cticker), g in div_groups.items():
+        events.append({"title": f"배당 {g['name']} {fmt(g['amount'])}원", "start": cdate, "color": "#3DD56D"})
+
+    # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
+    cal_positions = compute_positions(cal_trades) if cal_trades else {}
+    us_tickers = sorted(t for t, p in cal_positions.items() if p["market"] == "US" and p["qty"] > 0)
+
+    @st.cache_data(ttl=60 * 60 * 12)
+    def cached_earnings_date(ticker):
+        d = price_data.get_next_earnings_date_us(ticker)
+        return d.isoformat() if d else None
+
+    for eticker in us_tickers:
+        edate = cached_earnings_date(eticker)
+        if edate:
+            ename = cal_positions[eticker]["name"] or eticker
+            events.append({"title": f"실적발표 {ename}", "start": edate, "color": "#B073FF"})
+
+    if not events:
+        st.info("표시할 일정이 없습니다.")
+    else:
+        st_calendar(
+            events=events,
+            options={
+                "initialView": "dayGridMonth",
+                "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,listMonth"},
+                "height": 700,
+            },
+            key="main_calendar",
+        )
+    st.caption(
+        "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
+        "국내 종목 실적발표는 자동 조회 소스가 없어 표시되지 않습니다."
+    )
 
 # ---------------------------------------------------------------------------
 # 매매일지
