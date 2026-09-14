@@ -60,23 +60,42 @@ st.markdown(
     .jnl-table-wrap {
         overflow-x: auto;
     }
+    /* 국내/해외 표가 서로 같은 컬럼 순서를 쓰므로, 폭을 완전히 고정해(table-layout:fixed)
+       내용 길이와 무관하게 두 표의 가로 크기가 항상 똑같게 함 */
     .holdings-table {
-        width: auto !important;
+        width: 1080px !important;
+        table-layout: fixed;
     }
     .holdings-table td, .holdings-table th {
         padding: 3px 8px !important;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
-    /* 국내/해외 표가 서로 같은 컬럼 순서를 쓰므로, 폭을 고정해 두 표가 같은 크기로 정렬되게 함 */
-    .holdings-table th:nth-child(1), .holdings-table td:nth-child(1) { min-width: 200px; }
-    .holdings-table th:nth-child(2), .holdings-table td:nth-child(2) { min-width: 70px; }
-    .holdings-table th:nth-child(3), .holdings-table td:nth-child(3) { min-width: 70px; }
-    .holdings-table th:nth-child(4), .holdings-table td:nth-child(4) { min-width: 90px; }
-    .holdings-table th:nth-child(5), .holdings-table td:nth-child(5) { min-width: 90px; }
-    .holdings-table th:nth-child(6), .holdings-table td:nth-child(6) { min-width: 100px; }
-    .holdings-table th:nth-child(7), .holdings-table td:nth-child(7) { min-width: 100px; }
-    .holdings-table th:nth-child(8), .holdings-table td:nth-child(8) { min-width: 100px; }
+    .holdings-table th:nth-child(1), .holdings-table td:nth-child(1) { width: 220px; }
+    .holdings-table th:nth-child(2), .holdings-table td:nth-child(2) { width: 70px; }
+    .holdings-table th:nth-child(3), .holdings-table td:nth-child(3) { width: 70px; }
+    .holdings-table th:nth-child(4), .holdings-table td:nth-child(4) { width: 90px; }
+    .holdings-table th:nth-child(5), .holdings-table td:nth-child(5) { width: 90px; }
+    .holdings-table th:nth-child(6), .holdings-table td:nth-child(6) { width: 100px; }
+    .holdings-table th:nth-child(7), .holdings-table td:nth-child(7) { width: 100px; }
+    .holdings-table th:nth-child(8), .holdings-table td:nth-child(8) { width: 100px; }
     .holdings-table td:last-child, .holdings-table th:last-child {
-        min-width: 240px;
+        width: 240px;
+    }
+    .metric-card {
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 6px;
+    }
+    .metric-card .metric-label {
+        font-size: 0.8rem;
+        color: #444444;
+        margin-bottom: 4px;
+    }
+    .metric-card .metric-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #000000;
     }
     .cal-grid {
         width: 100%;
@@ -164,6 +183,16 @@ def render_table(df, scroll=False, extra_class=""):
     st.markdown(f'<div class="jnl-table-wrap">{html}</div>', unsafe_allow_html=True)
 
 
+def metric_card(label, value, color):
+    st.markdown(
+        f'<div class="metric-card" style="background-color:{color};">'
+        f'<div class="metric-label">{html.escape(label)}</div>'
+        f'<div class="metric-value">{html.escape(value)}</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data(ttl=300)
 def cached_price(ticker, market):
     return price_data.get_current_price(ticker, market)
@@ -226,11 +255,16 @@ with tab_dashboard:
         )
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("투자금액 (원금)", f"{principal:,.0f}")
-        c2.metric("평가 손익 (미실현)", f"{unrealized:,.0f}")
-        c3.metric("실현 손익", f"{realized:,.0f}")
-        c4.metric("누적 배당금", f"{total_dividends:,.0f}")
-        c5.metric("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-")
+        with c1:
+            metric_card("투자금액 (원금)", f"{principal:,.0f}", "#E8F0FE")
+        with c2:
+            metric_card("평가 손익 (미실현)", f"{unrealized:,.0f}", "#FFF4E0")
+        with c3:
+            metric_card("실현 손익", f"{realized:,.0f}", "#E6F4EA")
+        with c4:
+            metric_card("누적 배당금", f"{total_dividends:,.0f}", "#FCE8E6")
+        with c5:
+            metric_card("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-", "#F3E8FD")
 
         st.subheader("보유 종목")
         holding_notes = db.get_holding_notes()
@@ -386,7 +420,11 @@ with tab_calendar:
             m, y = 12, y - 1
         st.session_state.cal_month, st.session_state.cal_year = m, y
         st.rerun()
-    col_title.markdown(f"### {st.session_state.cal_year}년 {st.session_state.cal_month}월")
+    col_title.markdown(
+        f'<div style="text-align:center; font-size:1.5rem; font-weight:700; '
+        f'color:#000000; padding-top:6px;">{st.session_state.cal_year}년 {st.session_state.cal_month}월</div>',
+        unsafe_allow_html=True,
+    )
     if col_next.button("다음달 ▶"):
         m, y = st.session_state.cal_month + 1, st.session_state.cal_year
         if m > 12:
