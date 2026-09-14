@@ -11,6 +11,25 @@ from analytics import compute_positions, total_realized_pnl, total_unrealized_pn
 st.set_page_config(page_title="주식 매매일지", page_icon="📈", layout="wide")
 db.init_db()
 
+st.markdown(
+    """
+    <style>
+    div[data-baseweb="tab-list"] {
+        position: sticky;
+        top: 2.875rem;
+        z-index: 999;
+        background-color: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+        div[data-baseweb="tab-list"] {
+            background-color: #0e1117;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 MARKETS = ["KR", "US"]
 
 
@@ -18,9 +37,34 @@ def market_label(m):
     return "국내" if m == "KR" else "해외"
 
 
+def fmt(x):
+    """금액용: 1,000 단위 콤마 + 소수점 없이 표시. None/문자열은 그대로 통과."""
+    if x is None:
+        return "-"
+    if isinstance(x, str):
+        return x
+    return f"{x:,.0f}"
+
+
+def fmt_qty(x):
+    """수량용: 1,000 단위 콤마는 넣되, 소수(분할매수 등)는 그대로 살려서 표시."""
+    if x is None:
+        return "-"
+    if isinstance(x, str):
+        return x
+    if float(x).is_integer():
+        return f"{x:,.0f}"
+    return f"{x:,.4f}".rstrip("0").rstrip(".")
+
+
 @st.cache_data(ttl=300)
 def cached_price(ticker, market):
     return price_data.get_current_price(ticker, market)
+
+
+@st.cache_data(ttl=300)
+def cached_usdkrw():
+    return price_data.get_usdkrw_rate()
 
 
 tab_dashboard, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
@@ -53,28 +97,40 @@ with tab_dashboard:
         c4.metric("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-")
 
         st.subheader("보유 종목")
-        rows = []
+        holdings_kr, holdings_us = [], []
         for ticker, pos in positions.items():
             if pos["qty"] <= 0:
                 continue
             price = price_lookup.get(ticker)
-            rows.append(
-                {
-                    "종목": pos["name"] or ticker,
-                    "티커": ticker,
-                    "시장": market_label(pos["market"]),
-                    "수량": pos["qty"],
-                    "평단가": round(pos["avg_cost"], 2),
-                    "현재가": price if price is not None else "조회 실패",
-                    "평가손익": round((price - pos["avg_cost"]) * pos["qty"], 0)
-                    if price is not None
-                    else "-",
-                }
+            eval_amount = price * pos["qty"] if price is not None else None
+            entry = {
+                "eval_amount": eval_amount,
+                "종목": pos["name"] or ticker,
+                "티커": ticker,
+                "수량": fmt_qty(pos["qty"]),
+                "평단가": fmt(pos["avg_cost"]),
+                "현재가": fmt(price) if price is not None else "조회 실패",
+                "평가금": fmt(eval_amount),
+                "평가손익": fmt((price - pos["avg_cost"]) * pos["qty"]) if price is not None else "-",
+            }
+            (holdings_kr if pos["market"] == "KR" else holdings_us).append(entry)
+
+        def render_holdings(label, entries):
+            st.markdown(f"**{label}**")
+            if not entries:
+                st.caption("보유 종목 없음")
+                return
+            entries_sorted = sorted(
+                entries, key=lambda e: e["eval_amount"] if e["eval_amount"] is not None else -1, reverse=True
             )
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        else:
-            st.caption("현재 보유 중인 종목이 없습니다 (전량 매도됨).")
+            df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount"])
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+        col_kr, col_us = st.columns(2)
+        with col_kr:
+            render_holdings("🇰🇷 국내", holdings_kr)
+        with col_us:
+            render_holdings("🇺🇸 해외", holdings_us)
 
         st.subheader("목표가 진행률")
         targets = db.get_targets(active_only=True)
@@ -91,6 +147,13 @@ with tab_dashboard:
                 progress = max(0.0, min(price / t["target_price"], 1.0))
                 cols[0].progress(progress, text=f"현재가 {price:,.0f} / 목표가 {t['target_price']:,.0f}")
             cols[1].write(f"손절가: {t['stop_loss']:,.0f}" if t["stop_loss"] else "손절가 미설정")
+
+        usdkrw = cached_usdkrw()
+        rate_text = f"환율: 1 USD = {usdkrw:,.2f} KRW" if usdkrw is not None else "환율 조회 실패"
+        st.markdown(
+            f"<div style='text-align:right; color:gray; font-size:0.85em;'>{rate_text}</div>",
+            unsafe_allow_html=True,
+        )
 
 # ---------------------------------------------------------------------------
 # 매매일지

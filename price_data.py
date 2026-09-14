@@ -53,3 +53,8 @@ def get_current_price(ticker: str, market: str):
     if market == "KR":
         return get_price_kr(ticker)
     return get_price_us(ticker)
+
+
+def get_usdkrw_rate():
+    """1 USD 당 원화 환율. 실패 시 None."""
+    return get_price_us("KRW=X")
