@@ -14,20 +14,43 @@ db.init_db()
 st.markdown(
     """
     <style>
-    div[data-baseweb="tab-list"] {
+    div[role="tablist"] {
         position: sticky;
-        top: 2.875rem;
+        top: 60px;
         z-index: 999;
         background-color: #ffffff;
     }
     @media (prefers-color-scheme: dark) {
-        div[data-baseweb="tab-list"] {
+        div[role="tablist"] {
             background-color: #0e1117;
         }
     }
     h1, h2, h3 {
         color: #000000 !important;
         font-weight: 700 !important;
+    }
+    .jnl-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+    .jnl-table th {
+        color: #000000 !important;
+        font-weight: 700 !important;
+        text-align: left;
+        padding: 6px 10px;
+        border-bottom: 2px solid #cccccc;
+        background-color: #f7f7f7;
+        position: sticky;
+        top: 0;
+    }
+    .jnl-table td {
+        padding: 5px 10px;
+        border-bottom: 1px solid #eeeeee;
+    }
+    .jnl-table-scroll {
+        max-height: 480px;
+        overflow-y: auto;
     }
     </style>
     """,
@@ -61,6 +84,15 @@ def fmt_qty(x):
     return f"{x:,.4f}".rstrip("0").rstrip(".")
 
 
+def render_table(df, scroll=False):
+    """검정/볼드 컬럼명을 보장하기 위해 st.dataframe 대신 스타일링된 HTML 표로 렌더링.
+    (st.dataframe은 캔버스로 그려져서 CSS로 헤더 스타일을 바꿀 수 없음)"""
+    html = df.to_html(index=False, escape=True, border=0, classes="jnl-table")
+    if scroll:
+        html = f'<div class="jnl-table-scroll">{html}</div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
 @st.cache_data(ttl=300)
 def cached_price(ticker, market):
     return price_data.get_current_price(ticker, market)
@@ -69,6 +101,20 @@ def cached_price(ticker, market):
 @st.cache_data(ttl=300)
 def cached_usdkrw():
     return price_data.get_usdkrw_rate()
+
+
+def price_in_krw(ticker, market):
+    """평단가가 원화로 저장돼 있으므로(토스 거래내역서 기준), 비교 가능하도록
+    해외 종목 현재가도 원화로 환산해서 반환. 조회 실패 시 None."""
+    price = cached_price(ticker, market)
+    if price is None:
+        return None
+    if market == "US":
+        fx = cached_usdkrw()
+        if fx is None:
+            return None
+        return price * fx
+    return price
 
 
 tab_dashboard, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
@@ -85,7 +131,7 @@ with tab_dashboard:
     else:
         positions = compute_positions(trades)
         price_lookup = {
-            ticker: cached_price(ticker, pos["market"])
+            ticker: price_in_krw(ticker, pos["market"])
             for ticker, pos in positions.items()
             if pos["qty"] > 0
         }
@@ -93,12 +139,16 @@ with tab_dashboard:
         unrealized = total_unrealized_pnl(positions, price_lookup)
         wr = win_rate(positions)
         total_dividends = sum(d["amount"] for d in db.get_dividends())
+        principal = sum(
+            pos["avg_cost"] * pos["qty"] for pos in positions.values() if pos["qty"] > 0
+        )
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("실현 손익", f"{realized:,.0f}")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("투자금액 (원금)", f"{principal:,.0f}")
         c2.metric("평가 손익 (미실현)", f"{unrealized:,.0f}")
-        c3.metric("누적 배당금", f"{total_dividends:,.0f}")
-        c4.metric("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-")
+        c3.metric("실현 손익", f"{realized:,.0f}")
+        c4.metric("누적 배당금", f"{total_dividends:,.0f}")
+        c5.metric("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-")
 
         st.subheader("보유 종목")
         holdings_kr, holdings_us = [], []
@@ -128,7 +178,7 @@ with tab_dashboard:
                 entries, key=lambda e: e["eval_amount"] if e["eval_amount"] is not None else -1, reverse=True
             )
             df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount"])
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            render_table(df)
 
         col_kr, col_us = st.columns(2)
         with col_kr:
@@ -209,13 +259,16 @@ with tab_trades:
         df = pd.DataFrame([dict(t) for t in trades])
         df["side"] = df["side"].map({"BUY": "매수", "SELL": "매도"})
         df["market"] = df["market"].map(market_label)
-        st.dataframe(
+        df["quantity"] = df["quantity"].apply(fmt_qty)
+        df["price"] = df["price"].apply(fmt)
+        df["fee"] = df["fee"].apply(fmt)
+        df["tax"] = df["tax"].apply(fmt)
+        render_table(
             df[
                 ["id", "trade_date", "market", "ticker", "name", "side", "quantity", "price",
                  "fee", "tax", "strategy_tag", "thesis"]
             ],
-            use_container_width=True,
-            hide_index=True,
+            scroll=True,
         )
         del_id = st.number_input("삭제할 기록 ID", min_value=0, step=1, value=0)
         if st.button("선택한 ID 삭제") and del_id > 0:
@@ -264,10 +317,12 @@ with tab_dividends:
     if dividends:
         ddf = pd.DataFrame([dict(d) for d in dividends])
         ddf["market"] = ddf["market"].map(market_label)
-        st.dataframe(
-            ddf[["id", "pay_date", "market", "ticker", "name", "amount", "tax", "note"]],
-            use_container_width=True,
-            hide_index=True,
+        display_df = ddf.copy()
+        display_df["amount"] = display_df["amount"].apply(fmt)
+        display_df["tax"] = display_df["tax"].apply(fmt)
+        render_table(
+            display_df[["id", "pay_date", "market", "ticker", "name", "amount", "tax", "note"]],
+            scroll=True,
         )
         del_div_id = st.number_input("삭제할 배당 기록 ID", min_value=0, step=1, value=0, key="del_div_id")
         if st.button("선택한 배당 ID 삭제") and del_div_id > 0:
@@ -278,7 +333,9 @@ with tab_dividends:
         st.subheader("종목별 누적 배당금")
         by_ticker = ddf.groupby(["ticker", "name"], dropna=False)["amount"].sum().reset_index()
         by_ticker.columns = ["티커", "종목명", "누적 배당금"]
-        st.dataframe(by_ticker.sort_values("누적 배당금", ascending=False), use_container_width=True, hide_index=True)
+        by_ticker = by_ticker.sort_values("누적 배당금", ascending=False)
+        by_ticker["누적 배당금"] = by_ticker["누적 배당금"].apply(fmt)
+        render_table(by_ticker)
     else:
         st.caption("배당금 기록이 없습니다.")
 
@@ -378,7 +435,7 @@ with tab_perf:
         rows = []
         for ticker, pos in positions.items():
             realized = pos["realized_pnl"]
-            price = cached_price(ticker, pos["market"]) if pos["qty"] > 0 else None
+            price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
             unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
             dividend = dividends_by_ticker.get(ticker, 0.0)
             total = realized + unrealized + dividend
@@ -396,7 +453,7 @@ with tab_perf:
             )
         df = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
         st.subheader("종목별 손익 (배당금 포함)")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        render_table(df)
 
         st.subheader("누적 실현손익 추이")
         chrono = sorted(trades, key=chronological_key)
