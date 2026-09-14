@@ -40,9 +40,28 @@ PC의 로컬 IP(예: `192.168.0.5`)를 확인한 뒤, 같은 와이파이에 연
 ## 기능
 
 - **매매일지**: 종목, 매수/매도, 수량, 가격, 수수료, 날짜, 전략 태그, 매매 사유를 기록
+- **배당금**: 종목별 배당 입금 기록, 누적 배당금 집계
 - **목표가/손절가**: 종목별로 등록하고 현재가 대비 진행률 확인
 - **노트**: 특정 매매와 무관한 시황/종목 분석 메모
-- **성과분석**: 종목별 실현/평가 손익, 승률, 누적 실현손익 추이 그래프
+- **성과분석**: 종목별 실현/평가 손익(배당 포함), 승률, 누적 실현손익 추이 그래프
+
+## 토스 체결 캡쳐로 기록하기
+
+`screenshots_inbox/` 폴더에 토스증권 체결 내역 캡쳐를 넣고 Claude에게 "새 캡쳐 읽어줘"라고
+요청하면, 캡쳐를 직접 읽어서 종목/수량/가격/날짜를 추출한 뒤 `import_from_screenshot.py`로
+기록을 넣고 원본 캡쳐를 `screenshots_processed/`로 옮겨둡니다 (중복 처리 방지).
+
+```bash
+python import_from_screenshot.py trade --market KR --ticker 005930 --name 삼성전자 \
+  --side BUY --quantity 10 --price 71000 --date 2026-09-14 \
+  --thesis "실적 발표 후 저가 매수" --source-file screenshots_inbox/capture1.png
+
+python import_from_screenshot.py dividend --market US --ticker AAPL \
+  --amount 12000 --date 2026-09-14 --source-file screenshots_inbox/capture2.png
+```
+
+OCR이 아니라 Claude가 직접 화면을 읽는 방식이라 정확도는 높지만, 매번 Claude에게
+요청해야 동작합니다 (완전 자동 백그라운드 처리는 아님).
 
 ## 한계 / 알려진 제약
 
