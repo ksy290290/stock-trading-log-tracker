@@ -9,9 +9,11 @@ Usage:
     python import_statement.py <path-to-statement.pdf>              # dry run, prints summary only
     python import_statement.py <path-to-statement.pdf> --commit     # actually writes to the DB
 
-Re-running on the same (or an overlapping) statement is safe: a trade/dividend
-row is skipped if an identical one (same ticker, date, side, quantity, price)
-already exists.
+Re-running on the same (or an overlapping) statement is safe: rows are
+deduped by count per (ticker, date, side, quantity, price) combo, not by
+plain existence, so two genuinely separate trades that happen to share every
+field (e.g. two identical auto-invest fills on the same day) both import,
+while a true re-run of the same statement inserts nothing new.
 
 Known limitations:
 - Column layout is parsed by position (calibrated per-page from that page's
@@ -27,10 +29,8 @@ Known limitations:
   price manually in the app).
 """
 import argparse
-import json
 import re
-import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import db
 
@@ -211,17 +211,17 @@ def build_dividends(rows):
 
 
 def existing_trade_keys():
-    return {
+    return [
         (t["ticker"], t["trade_date"], t["side"], round(t["quantity"], 4), round(t["price"], 2))
         for t in db.get_trades()
-    }
+    ]
 
 
 def existing_dividend_keys():
-    return {
+    return [
         (d["ticker"], d["pay_date"], round(d["amount"], 2))
         for d in db.get_dividends()
-    }
+    ]
 
 
 def main():
@@ -249,28 +249,33 @@ def main():
         return
 
     db.init_db()
-    seen_trades = existing_trade_keys()
-    seen_dividends = existing_dividend_keys()
+    # counts, not sets: two genuinely separate trades can share every field
+    # (same ticker/date/side/qty/price), so dedup by "how many of this exact
+    # combo already exist" rather than "does this combo exist at all"
+    existing_trade_counts = Counter(existing_trade_keys())
+    existing_dividend_counts = Counter(existing_dividend_keys())
+    seen_trades = Counter()
+    seen_dividends = Counter()
 
     inserted_t = skipped_t = 0
     for t in trades:
         key = (t["ticker"], t["trade_date"], t["side"], round(t["quantity"], 4), round(t["price"], 2))
-        if key in seen_trades:
+        seen_trades[key] += 1
+        if seen_trades[key] <= existing_trade_counts[key]:
             skipped_t += 1
             continue
         db.add_trade(t["ticker"], t["name"], t["market"], t["side"], t["quantity"], t["price"],
                      t["fee"], t["trade_date"], None, None)
-        seen_trades.add(key)
         inserted_t += 1
 
     inserted_d = skipped_d = 0
     for d in dividends:
         key = (d["ticker"], d["pay_date"], round(d["amount"], 2))
-        if key in seen_dividends:
+        seen_dividends[key] += 1
+        if seen_dividends[key] <= existing_dividend_counts[key]:
             skipped_d += 1
             continue
         db.add_dividend(d["ticker"], d["name"], d["market"], d["pay_date"], d["amount"], d["tax"], d["note"])
-        seen_dividends.add(key)
         inserted_d += 1
 
     print(f"\ntrades: inserted {inserted_t}, skipped (already present) {skipped_t}")
