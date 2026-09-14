@@ -186,3 +186,13 @@ def delete_dividend(dividend_id):
     conn.execute("DELETE FROM dividends WHERE id = ?", (dividend_id,))
     conn.commit()
     conn.close()
+
+
+def update_dividend_ticker(dividend_id, ticker, name, market):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE dividends SET ticker = ?, name = ?, market = ? WHERE id = ?",
+        (ticker, name, market, dividend_id),
+    )
+    conn.commit()
+    conn.close()

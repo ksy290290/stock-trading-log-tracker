@@ -1,6 +1,7 @@
 import datetime as dt
 from collections import defaultdict
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -117,6 +118,17 @@ def price_in_krw(ticker, market):
     return price
 
 
+TICKER_NAME_MAP = {}
+for _t in db.get_trades():
+    if _t["name"] and _t["ticker"] not in TICKER_NAME_MAP:
+        TICKER_NAME_MAP[_t["ticker"]] = _t["name"]
+
+
+def suggest_name(ticker_raw, market):
+    ticker = ticker_raw.strip().upper() if market == "US" else ticker_raw.strip()
+    return TICKER_NAME_MAP.get(ticker, "")
+
+
 tab_dashboard, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf = st.tabs(
     ["📊 대시보드", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석"]
 )
@@ -214,11 +226,11 @@ with tab_dashboard:
 # ---------------------------------------------------------------------------
 with tab_trades:
     st.subheader("매매 기록 추가")
+    col_m, col_tk = st.columns(2)
+    market = col_m.selectbox("시장", MARKETS, format_func=market_label, key="trade_market_outer")
+    ticker = col_tk.text_input("티커/종목코드 (예: 005930, AAPL)", key="trade_ticker_outer")
     with st.form("trade_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        market = col1.selectbox("시장", MARKETS, format_func=market_label)
-        ticker = col2.text_input("티커/종목코드 (예: 005930, AAPL)")
-        name = col3.text_input("종목명 (선택)")
+        name = st.text_input("종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(ticker, market))
 
         col4, col5, col6 = st.columns(3)
         side = col4.selectbox("구분", ["BUY", "SELL"], format_func=lambda s: "매수" if s == "BUY" else "매도")
@@ -283,11 +295,13 @@ with tab_trades:
 # ---------------------------------------------------------------------------
 with tab_dividends:
     st.subheader("배당금 기록 추가")
+    col1, col2 = st.columns(2)
+    d_market = col1.selectbox("시장", MARKETS, format_func=market_label, key="d_market")
+    d_ticker = col2.text_input("티커/종목코드", key="d_ticker")
     with st.form("dividend_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        d_market = col1.selectbox("시장", MARKETS, format_func=market_label, key="d_market")
-        d_ticker = col2.text_input("티커/종목코드", key="d_ticker")
-        d_name = col3.text_input("종목명 (선택)", key="d_name")
+        d_name = st.text_input(
+            "종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(d_ticker, d_market), key="d_name"
+        )
 
         col4, col5, col6 = st.columns(3)
         d_amount = col4.number_input("입금액 (세후 실수령액)", min_value=0.0, step=100.0)
@@ -344,11 +358,13 @@ with tab_dividends:
 # ---------------------------------------------------------------------------
 with tab_targets:
     st.subheader("목표가/손절가 등록")
+    col1, col2 = st.columns(2)
+    t_market = col1.selectbox("시장", MARKETS, format_func=market_label, key="t_market")
+    t_ticker = col2.text_input("티커/종목코드", key="t_ticker")
     with st.form("target_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        t_market = col1.selectbox("시장", MARKETS, format_func=market_label, key="t_market")
-        t_ticker = col2.text_input("티커/종목코드", key="t_ticker")
-        t_name = col3.text_input("종목명 (선택)", key="t_name")
+        t_name = st.text_input(
+            "종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(t_ticker, t_market), key="t_name"
+        )
 
         col4, col5 = st.columns(2)
         target_price = col4.number_input("목표가", min_value=0.0, step=1.0)
@@ -399,9 +415,70 @@ with tab_targets:
 # ---------------------------------------------------------------------------
 with tab_journal:
     st.subheader("노트 작성")
+
+    NEW_ENTRY_LABEL = "➕ 새 항목 (직접 입력)"
+
+    if st.session_state.get("_clear_note_inputs"):
+        st.session_state.note_ticker_input = ""
+        st.session_state.note_name_input = ""
+        st.session_state.note_holding_select = NEW_ENTRY_LABEL
+        del st.session_state["_clear_note_inputs"]
+
+    note_trades = db.get_trades()
+    note_positions = compute_positions(note_trades) if note_trades else {}
+    NAME_TO_TICKER_MAP = {name: ticker for ticker, name in TICKER_NAME_MAP.items()}
+
+    def _holdings_by_market(market):
+        items = []
+        for ticker, pos in note_positions.items():
+            if pos["market"] != market or pos["qty"] <= 0:
+                continue
+            price = price_in_krw(ticker, market)
+            eval_amount = price * pos["qty"] if price is not None else -1
+            items.append((eval_amount, ticker, pos["name"] or ticker))
+        items.sort(key=lambda x: x[0], reverse=True)
+        return items
+
+    holding_options = [NEW_ENTRY_LABEL]
+    holding_label_map = {}
+    for flag, market in (("🇰🇷", "KR"), ("🇺🇸", "US")):
+        for eval_amount, ticker, name in _holdings_by_market(market):
+            label = f"{flag} {name} ({ticker})"
+            holding_options.append(label)
+            holding_label_map[label] = (ticker, name)
+
+    def _apply_holding_selection():
+        sel = st.session_state.note_holding_select
+        if sel == NEW_ENTRY_LABEL:
+            return
+        ticker, name = holding_label_map[sel]
+        st.session_state.note_ticker_input = ticker
+        st.session_state.note_name_input = name
+
+    def _on_note_ticker_change():
+        t = st.session_state.note_ticker_input.strip()
+        name = TICKER_NAME_MAP.get(t) or TICKER_NAME_MAP.get(t.upper())
+        if name:
+            st.session_state.note_name_input = name
+
+    def _on_note_name_change():
+        n = st.session_state.note_name_input.strip()
+        ticker = NAME_TO_TICKER_MAP.get(n)
+        if ticker:
+            st.session_state.note_ticker_input = ticker
+
+    st.selectbox(
+        "종목 선택 (보유 종목, 평가금 높은 순)",
+        holding_options,
+        key="note_holding_select",
+        on_change=_apply_holding_selection,
+    )
+    col_nt, col_nn = st.columns(2)
+    col_nt.text_input("티커/종목코드 (선택)", key="note_ticker_input", on_change=_on_note_ticker_change)
+    col_nn.text_input("종목명 (선택)", key="note_name_input", on_change=_on_note_name_change)
+
     with st.form("journal_form", clear_on_submit=True):
         j_date = st.date_input("날짜", value=dt.date.today())
-        j_ticker = st.text_input("관련 종목 (선택)")
         j_title = st.text_input("제목")
         j_content = st.text_area("내용")
         submitted = st.form_submit_button("저장")
@@ -409,14 +486,19 @@ with tab_journal:
             if not j_title:
                 st.error("제목은 필수입니다.")
             else:
+                j_ticker = st.session_state.get("note_ticker_input", "")
                 db.add_journal(j_date.isoformat(), j_ticker.strip() or None, j_title.strip(), j_content.strip())
+                st.session_state["_clear_note_inputs"] = True
                 st.success("저장했습니다.")
                 st.rerun()
 
     st.subheader("노트 목록")
     entries = db.get_journal()
     for e in entries:
-        with st.expander(f"[{e['entry_date']}] {e['title']}" + (f" ({e['ticker']})" if e["ticker"] else "")):
+        ticker_label = e["ticker"]
+        if ticker_label and TICKER_NAME_MAP.get(ticker_label):
+            ticker_label = f"{TICKER_NAME_MAP[ticker_label]} ({ticker_label})"
+        with st.expander(f"[{e['entry_date']}] {e['title']}" + (f" ({ticker_label})" if ticker_label else "")):
             st.write(e["content"])
 
 # ---------------------------------------------------------------------------
@@ -453,7 +535,7 @@ with tab_perf:
             )
         df = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
         st.subheader("종목별 손익 (배당금 포함)")
-        render_table(df)
+        render_table(df, scroll=True)
 
         st.subheader("누적 실현손익 추이")
         chrono = sorted(trades, key=chronological_key)
@@ -475,7 +557,20 @@ with tab_perf:
                 p["qty"] -= t["quantity"]
                 cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})
         if cum_data:
-            chart_df = pd.DataFrame(cum_data).set_index("날짜")
-            st.line_chart(chart_df)
+            chart_df = pd.DataFrame(cum_data)
+            chart = (
+                alt.Chart(chart_df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("날짜:O", title="날짜"),
+                    y=alt.Y("누적실현손익:Q", title="누적실현손익", axis=alt.Axis(format=",.0f")),
+                    tooltip=[
+                        alt.Tooltip("날짜:O", title="날짜"),
+                        alt.Tooltip("누적실현손익:Q", title="누적실현손익", format=",.0f"),
+                    ],
+                )
+                .interactive()
+            )
+            st.altair_chart(chart, use_container_width=True)
         else:
             st.caption("매도 기록이 없어 실현손익 추이를 표시할 수 없습니다.")
