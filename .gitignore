@@ -3,3 +3,4 @@ __pycache__/
 stock_journal.db
 .venv/
 venv/
+*.pdf
