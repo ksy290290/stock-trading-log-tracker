@@ -178,6 +178,7 @@ def build_trades(rows):
                 "quantity": num(r.get("qty")),
                 "price": num(r.get("unit_price")),
                 "fee": num(r.get("fee")),
+                "tax": num(r.get("tax")),
                 "trade_date": r["date"].replace(".", "-"),
             }
         )
@@ -265,7 +266,7 @@ def main():
             skipped_t += 1
             continue
         db.add_trade(t["ticker"], t["name"], t["market"], t["side"], t["quantity"], t["price"],
-                     t["fee"], t["trade_date"], None, None)
+                     t["fee"], t["trade_date"], None, None, t["tax"])
         inserted_t += 1
 
     inserted_d = skipped_d = 0

@@ -53,6 +53,7 @@ def cmd_trade(args):
         trade_date=args.date,
         strategy_tag=args.tag,
         thesis=args.thesis,
+        tax=args.tax,
     )
     print(
         f"매매 기록 추가: [{args.market}] {args.ticker} {args.side} "
@@ -90,6 +91,7 @@ def build_parser():
     p_trade.add_argument("--quantity", type=float, required=True)
     p_trade.add_argument("--price", type=float, required=True)
     p_trade.add_argument("--fee", type=float, default=0.0)
+    p_trade.add_argument("--tax", type=float, default=0.0, help="매도 시 증권거래세 등")
     p_trade.add_argument("--date", required=True, help="YYYY-MM-DD")
     p_trade.add_argument("--tag", default=None, help="전략/태그")
     p_trade.add_argument("--thesis", default=None, help="매매 사유/근거")

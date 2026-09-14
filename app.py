@@ -6,7 +6,7 @@ import streamlit as st
 
 import db
 import price_data
-from analytics import compute_positions, total_realized_pnl, total_unrealized_pnl, win_rate
+from analytics import chronological_key, compute_positions, total_realized_pnl, total_unrealized_pnl, win_rate
 
 st.set_page_config(page_title="주식 매매일지", page_icon="📈", layout="wide")
 db.init_db()
@@ -24,6 +24,10 @@ st.markdown(
         div[data-baseweb="tab-list"] {
             background-color: #0e1117;
         }
+    }
+    h1, h2, h3 {
+        color: #000000 !important;
+        font-weight: 700 !important;
     }
     </style>
     """,
@@ -171,10 +175,11 @@ with tab_trades:
         quantity = col5.number_input("수량", min_value=0.0, step=1.0)
         price = col6.number_input("체결가", min_value=0.0, step=1.0)
 
-        col7, col8, col9 = st.columns(3)
+        col7, col8 = st.columns(2)
         fee = col7.number_input("수수료", min_value=0.0, step=0.1, value=0.0)
-        trade_date = col8.date_input("거래일", value=dt.date.today())
-        strategy_tag = col9.text_input("전략/태그 (선택)")
+        tax = col8.number_input("거래세 (매도 시)", min_value=0.0, step=0.1, value=0.0)
+        trade_date = st.date_input("거래일", value=dt.date.today())
+        strategy_tag = st.text_input("전략/태그 (선택)")
 
         thesis = st.text_area("매매 사유/근거")
         submitted = st.form_submit_button("기록 추가")
@@ -193,6 +198,7 @@ with tab_trades:
                     trade_date.isoformat(),
                     strategy_tag.strip() or None,
                     thesis.strip() or None,
+                    tax,
                 )
                 st.success("기록을 추가했습니다.")
                 st.rerun()
@@ -206,7 +212,7 @@ with tab_trades:
         st.dataframe(
             df[
                 ["id", "trade_date", "market", "ticker", "name", "side", "quantity", "price",
-                 "fee", "strategy_tag", "thesis"]
+                 "fee", "tax", "strategy_tag", "thesis"]
             ],
             use_container_width=True,
             hide_index=True,
@@ -375,23 +381,25 @@ with tab_perf:
             price = cached_price(ticker, pos["market"]) if pos["qty"] > 0 else None
             unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
             dividend = dividends_by_ticker.get(ticker, 0.0)
+            total = realized + unrealized + dividend
             rows.append(
                 {
+                    "_sort": total,
                     "종목": pos["name"] or ticker,
                     "티커": ticker,
-                    "실현손익": round(realized, 0),
-                    "평가손익": round(unrealized, 0),
-                    "배당금": round(dividend, 0),
-                    "합계": round(realized + unrealized + dividend, 0),
+                    "실현손익": fmt(round(realized, 0)),
+                    "평가손익": fmt(round(unrealized, 0)),
+                    "배당금": fmt(round(dividend, 0)),
+                    "합계": fmt(round(total, 0)),
                     "매도횟수": len(pos["sell_records"]),
                 }
             )
-        df = pd.DataFrame(rows).sort_values("합계", ascending=False)
+        df = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
         st.subheader("종목별 손익 (배당금 포함)")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         st.subheader("누적 실현손익 추이")
-        chrono = sorted(trades, key=lambda t: (t["trade_date"], t["id"]))
+        chrono = sorted(trades, key=chronological_key)
         cum_data = []
         running_positions = {}
         cum = 0.0
@@ -405,7 +413,7 @@ with tab_perf:
                 p["qty"] += t["quantity"]
                 p["avg_cost"] = total_cost / p["qty"] if p["qty"] else 0.0
             else:
-                pnl = (t["price"] - p["avg_cost"]) * t["quantity"] - (t["fee"] or 0)
+                pnl = (t["price"] - p["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
                 cum += pnl
                 p["qty"] -= t["quantity"]
                 cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})

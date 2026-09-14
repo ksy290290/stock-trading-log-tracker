@@ -25,6 +25,7 @@ def init_db():
             quantity REAL NOT NULL,
             price REAL NOT NULL,
             fee REAL DEFAULT 0,
+            tax REAL DEFAULT 0,          -- 매도 시 증권거래세 등
             trade_date TEXT NOT NULL,
             strategy_tag TEXT,
             thesis TEXT,
@@ -32,6 +33,9 @@ def init_db():
         )
         """
     )
+    existing_cols = {row["name"] for row in cur.execute("PRAGMA table_info(trades)").fetchall()}
+    if "tax" not in existing_cols:
+        cur.execute("ALTER TABLE trades ADD COLUMN tax REAL DEFAULT 0")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS targets (
@@ -79,13 +83,13 @@ def init_db():
     conn.close()
 
 
-def add_trade(ticker, name, market, side, quantity, price, fee, trade_date, strategy_tag, thesis):
+def add_trade(ticker, name, market, side, quantity, price, fee, trade_date, strategy_tag, thesis, tax=0.0):
     conn = get_conn()
     conn.execute(
-        """INSERT INTO trades (ticker, name, market, side, quantity, price, fee, trade_date,
+        """INSERT INTO trades (ticker, name, market, side, quantity, price, fee, tax, trade_date,
                                 strategy_tag, thesis, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, name, market, side, quantity, price, fee, trade_date, strategy_tag, thesis,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, name, market, side, quantity, price, fee, tax, trade_date, strategy_tag, thesis,
          datetime.now().isoformat()),
     )
     conn.commit()

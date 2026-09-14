@@ -6,9 +6,19 @@ Good enough for a personal journal; not tax-accurate.
 """
 from collections import defaultdict
 
+_SIDE_ORDER = {"BUY": 0, "SELL": 1}
+
+
+def chronological_key(t):
+    # Toss's statement doesn't include time-of-day, and same-day rows aren't
+    # always printed in execution order (a same-day SELL can be listed before
+    # its matching BUY) - process all buys before sells on a given date since
+    # a long-only retail account can't sell what it hasn't bought yet.
+    return (t["trade_date"], _SIDE_ORDER[t["side"]], t["id"])
+
 
 def _sorted_trades(trades):
-    return sorted(trades, key=lambda t: (t["trade_date"], t["id"]))
+    return sorted(trades, key=chronological_key)
 
 
 def compute_positions(trades):
@@ -31,7 +41,7 @@ def compute_positions(trades):
             pos["qty"] += t["quantity"]
             pos["avg_cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
         else:  # SELL
-            pnl = (t["price"] - pos["avg_cost"]) * t["quantity"] - (t["fee"] or 0)
+            pnl = (t["price"] - pos["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
             pos["realized_pnl"] += pnl
             pos["qty"] -= t["quantity"]
             pos["sell_records"].append(
