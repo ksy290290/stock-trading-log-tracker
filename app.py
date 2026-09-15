@@ -131,10 +131,20 @@ st.markdown(
     .cal-tot-buy {
         color: #2f6fd6;
         font-size: 0.64rem;
+        font-weight: 700;
     }
     .cal-tot-sell {
         color: #d6462f;
         font-size: 0.64rem;
+        font-weight: 700;
+    }
+    .cal-tot-div {
+        color: #1f9d55;
+        font-size: 0.64rem;
+        font-weight: 700;
+    }
+    .cal-event strong {
+        font-weight: 800;
     }
     .cal-event {
         color: #ffffff;
@@ -147,6 +157,7 @@ st.markdown(
         white-space: nowrap;
     }
     .cal-details {
+        position: relative;
         margin-top: 1px;
     }
     .cal-details summary {
@@ -163,9 +174,12 @@ st.markdown(
         font-weight: 700;
     }
     .cal-full {
+        /* details 요소 기준 바로 아래에 뜨게 해서 summary(토글 버튼)를 안 가리게 함
+           - 안 그러면 팝업이 summary를 덮어버려서 다시 클릭해도 안 닫힘 */
         position: absolute;
-        top: 4px;
-        left: 4px;
+        top: 100%;
+        left: 0;
+        margin-top: 2px;
         min-width: 220px;
         max-width: 320px;
         max-height: 280px;
@@ -239,6 +253,21 @@ def metric_card(label, value, color):
         f"</div>",
         unsafe_allow_html=True,
     )
+
+
+_CAL_LABEL_PREFIXES = ("매수", "매도", "배당", "실적발표")
+
+
+def render_cal_event(text, color, css_class="cal-event"):
+    """캘린더 이벤트 한 줄을 렌더링, 앞의 매수/매도/배당/실적발표 라벨만 볼드 처리."""
+    for prefix in _CAL_LABEL_PREFIXES:
+        if text.startswith(prefix + " "):
+            rest = text[len(prefix):]
+            return (
+                f'<div class="{css_class}" style="background:{color}" title="{html.escape(text)}">'
+                f"<strong>{prefix}</strong>{html.escape(rest)}</div>"
+            )
+    return f'<div class="{css_class}" style="background:{color}" title="{html.escape(text)}">{html.escape(text)}</div>'
 
 
 @st.cache_data(ttl=300)
@@ -418,8 +447,10 @@ with tab_calendar:
 
     # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
     trade_groups = defaultdict(lambda: {"qty": 0.0, "name": None})
-    # 날짜별 매수/매도 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
-    day_totals = defaultdict(lambda: {"buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0})
+    # 날짜별 매수/매도/배당 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
+    day_totals = defaultdict(
+        lambda: {"buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0, "div_krw": 0.0}
+    )
     for t in cal_trades:
         key = (t["trade_date"], t["ticker"], t["side"])
         trade_groups[key]["qty"] += t["quantity"]
@@ -442,6 +473,7 @@ with tab_calendar:
         div_groups[key]["name"] = d["name"] or d["ticker"]
     for (cdate, cticker), g in div_groups.items():
         events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#3DD56D"))
+        day_totals[cdate]["div_krw"] += g["amount"]
 
     # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
     cal_positions = compute_positions(cal_trades) if cal_trades else {}
@@ -497,15 +529,10 @@ with tab_calendar:
             in_month = day.month == st.session_state.cal_month
             evs = events_by_date.get(day.isoformat(), [])
             cell_class = "cal-dim" if not in_month else ""
-            ev_html = "".join(
-                f'<div class="cal-event" style="background:{c}" title="{html.escape(t)}">{html.escape(t)}</div>'
-                for t, c in evs[:4]
-            )
+            ev_html = "".join(render_cal_event(t, c) for t, c in evs[:4])
             details_html = ""
             if len(evs) > 4:
-                full_items = "".join(
-                    f'<div class="cal-event" style="background:{c}">{html.escape(t)}</div>' for t, c in evs
-                )
+                full_items = "".join(render_cal_event(t, c) for t, c in evs)
                 details_html = (
                     f"<details class=\"cal-details\"><summary>+{len(evs) - 4}건 더</summary>"
                     f'<div class="cal-full">'
@@ -519,10 +546,12 @@ with tab_calendar:
                 lines = []
                 if dtot["buy_krw"] > 0:
                     usd = f" (${dtot['buy_usd']:,.0f})" if dtot["buy_usd"] > 0 else ""
-                    lines.append(f'<span class="cal-tot-buy">매수 {fmt(dtot["buy_krw"])}{usd}</span>')
+                    lines.append(f'<span class="cal-tot-buy"><strong>매수</strong> {fmt(dtot["buy_krw"])}{usd}</span>')
                 if dtot["sell_krw"] > 0:
                     usd = f" (${dtot['sell_usd']:,.0f})" if dtot["sell_usd"] > 0 else ""
-                    lines.append(f'<span class="cal-tot-sell">매도 {fmt(dtot["sell_krw"])}{usd}</span>')
+                    lines.append(f'<span class="cal-tot-sell"><strong>매도</strong> {fmt(dtot["sell_krw"])}{usd}</span>')
+                if dtot["div_krw"] > 0:
+                    lines.append(f'<span class="cal-tot-div"><strong>배당</strong> {fmt(dtot["div_krw"])}</span>')
                 tot_html = "".join(f"<div>{line}</div>" for line in lines)
 
             _rows.append(
@@ -538,14 +567,17 @@ with tab_calendar:
     month_sell_krw = sum(v["sell_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
     month_buy_usd = sum(v["buy_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
     month_sell_usd = sum(v["sell_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
+    month_div_krw = sum(v["div_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
 
-    mcol1, mcol2 = st.columns(2)
+    mcol1, mcol2, mcol3 = st.columns(3)
     with mcol1:
         buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
         metric_card(f"{st.session_state.cal_month}월 누적 매수", buy_val, "#E8F0FE")
     with mcol2:
         sell_val = fmt(month_sell_krw) + (f" (${month_sell_usd:,.0f})" if month_sell_usd else "")
         metric_card(f"{st.session_state.cal_month}월 누적 매도", sell_val, "#FCE8E6")
+    with mcol3:
+        metric_card(f"{st.session_state.cal_month}월 누적 배당금", fmt(month_div_krw), "#E6F4EA")
 
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
