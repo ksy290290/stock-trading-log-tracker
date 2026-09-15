@@ -116,7 +116,9 @@ st.markdown(
         height: 112px;
         padding: 4px;
         font-size: 0.72rem;
-        overflow: hidden;
+        /* overflow:hidden was clipping the "+N건 더" popup, since it's a
+           descendant even though position:absolute - popups need a
+           non-clipping ancestor to be able to float over neighboring rows */
         position: relative;
         cursor: pointer;
     }
