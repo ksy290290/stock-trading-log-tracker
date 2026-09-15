@@ -113,10 +113,12 @@ st.markdown(
     .cal-grid td {
         vertical-align: top;
         border: 1px solid #eee;
-        height: 92px;
+        height: 112px;
         padding: 4px;
         font-size: 0.72rem;
         overflow: hidden;
+        position: relative;
+        cursor: pointer;
     }
     .cal-grid td.cal-dim {
         background-color: #fafafa;
@@ -125,6 +127,14 @@ st.markdown(
     .cal-daynum {
         font-weight: 700;
         margin-bottom: 2px;
+    }
+    .cal-tot-buy {
+        color: #2f6fd6;
+        font-size: 0.64rem;
+    }
+    .cal-tot-sell {
+        color: #d6462f;
+        font-size: 0.64rem;
     }
     .cal-event {
         color: #ffffff;
@@ -136,9 +146,47 @@ st.markdown(
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    .cal-more {
+    .cal-details {
+        margin-top: 1px;
+    }
+    .cal-details summary {
         font-size: 0.68rem;
         color: #888888;
+        cursor: pointer;
+        list-style: none;
+    }
+    .cal-details summary::-webkit-details-marker {
+        display: none;
+    }
+    .cal-details[open] summary {
+        color: #333333;
+        font-weight: 700;
+    }
+    .cal-full {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        min-width: 220px;
+        max-width: 320px;
+        max-height: 280px;
+        overflow-y: auto;
+        background-color: #ffffff;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        padding: 8px;
+        z-index: 1000;
+        cursor: default;
+        white-space: normal;
+    }
+    .cal-full-title {
+        font-weight: 700;
+        color: #000000;
+        margin-bottom: 4px;
+        font-size: 0.75rem;
+    }
+    .cal-full .cal-event {
+        white-space: normal;
     }
     </style>
     """,
@@ -370,10 +418,17 @@ with tab_calendar:
 
     # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
     trade_groups = defaultdict(lambda: {"qty": 0.0, "name": None})
+    # 날짜별 매수/매도 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
+    day_totals = defaultdict(lambda: {"buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0})
     for t in cal_trades:
         key = (t["trade_date"], t["ticker"], t["side"])
         trade_groups[key]["qty"] += t["quantity"]
         trade_groups[key]["name"] = t["name"] or t["ticker"]
+        side_key = "buy" if t["side"] == "BUY" else "sell"
+        amount_krw = t["quantity"] * t["price"]
+        day_totals[t["trade_date"]][f"{side_key}_krw"] += amount_krw
+        if t["market"] == "US" and t["fx_rate"]:
+            day_totals[t["trade_date"]][f"{side_key}_usd"] += amount_krw / t["fx_rate"]
     for (cdate, cticker, cside), g in trade_groups.items():
         label = "매수" if cside == "BUY" else "매도"
         color = "#3D9DF3" if cside == "BUY" else "#FF6C6C"
@@ -446,16 +501,56 @@ with tab_calendar:
                 f'<div class="cal-event" style="background:{c}" title="{html.escape(t)}">{html.escape(t)}</div>'
                 for t, c in evs[:4]
             )
+            details_html = ""
             if len(evs) > 4:
-                ev_html += f'<div class="cal-more">+{len(evs) - 4}건 더</div>'
-            _rows.append(f'<td class="{cell_class}"><div class="cal-daynum">{day.day}</div>{ev_html}</td>')
+                full_items = "".join(
+                    f'<div class="cal-event" style="background:{c}">{html.escape(t)}</div>' for t, c in evs
+                )
+                details_html = (
+                    f"<details class=\"cal-details\"><summary>+{len(evs) - 4}건 더</summary>"
+                    f'<div class="cal-full">'
+                    f'<div class="cal-full-title">{day.month}월 {day.day}일 전체 내역 ({len(evs)}건)</div>'
+                    f"{full_items}</div></details>"
+                )
+
+            dtot = day_totals.get(day.isoformat())
+            tot_html = ""
+            if dtot:
+                lines = []
+                if dtot["buy_krw"] > 0:
+                    usd = f" (${dtot['buy_usd']:,.0f})" if dtot["buy_usd"] > 0 else ""
+                    lines.append(f'<span class="cal-tot-buy">매수 {fmt(dtot["buy_krw"])}{usd}</span>')
+                if dtot["sell_krw"] > 0:
+                    usd = f" (${dtot['sell_usd']:,.0f})" if dtot["sell_usd"] > 0 else ""
+                    lines.append(f'<span class="cal-tot-sell">매도 {fmt(dtot["sell_krw"])}{usd}</span>')
+                tot_html = "".join(f"<div>{line}</div>" for line in lines)
+
+            _rows.append(
+                f'<td class="{cell_class}">'
+                f"<div class=\"cal-daynum\">{day.day}</div>{tot_html}{ev_html}{details_html}</td>"
+            )
         _rows.append("</tr>")
     _rows.append("</table>")
     st.markdown("".join(_rows), unsafe_allow_html=True)
 
+    month_prefix = f"{st.session_state.cal_year}-{st.session_state.cal_month:02d}"
+    month_buy_krw = sum(v["buy_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
+    month_sell_krw = sum(v["sell_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
+    month_buy_usd = sum(v["buy_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
+    month_sell_usd = sum(v["sell_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
+
+    mcol1, mcol2 = st.columns(2)
+    with mcol1:
+        buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
+        metric_card(f"{st.session_state.cal_month}월 누적 매수", buy_val, "#E8F0FE")
+    with mcol2:
+        sell_val = fmt(month_sell_krw) + (f" (${month_sell_usd:,.0f})" if month_sell_usd else "")
+        metric_card(f"{st.session_state.cal_month}월 누적 매도", sell_val, "#FCE8E6")
+
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
-        "국내 종목 실적발표는 자동 조회 소스가 없어 표시되지 않습니다."
+        "국내 종목 실적발표는 자동 조회 소스가 없어 표시되지 않습니다. '+N건 더'를 클릭하면 전체 내역이 펼쳐집니다 "
+        "(더블클릭은 Streamlit 보안 정책상 지원되지 않아 클릭으로 대체했습니다)."
     )
 
 # ---------------------------------------------------------------------------
