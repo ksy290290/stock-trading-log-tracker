@@ -208,10 +208,11 @@ st.markdown(
     }
     .tm-canvas {
         position: relative;
-        max-width: 100%;
-        overflow-x: auto;
         background: #fafafa;
         border-radius: 6px;
+        /* overflow를 auto/hidden으로 두면 CSS 스펙상 overflow-x/y가 서로 묶여서
+           타일 hover 툴팁(position:absolute, 타일 바깥으로 튀어나옴)이 잘림 ->
+           캘린더 팝업 때와 동일한 문제라 일부러 overflow를 지정하지 않음(기본 visible). */
     }
     .tm-sector-header {
         position: absolute;
@@ -230,6 +231,12 @@ st.markdown(
     .tm-tile {
         position: absolute;
         box-sizing: border-box;
+        cursor: default;
+    }
+    .tm-tile-box {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
         border: 1px solid rgba(255,255,255,0.5);
         display: flex;
         flex-direction: column;
@@ -238,6 +245,31 @@ st.markdown(
         text-align: center;
         overflow: hidden;
         line-height: 1.15;
+    }
+    .tm-tooltip {
+        display: none;
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        margin-bottom: 5px;
+        background: #1e1e1e;
+        color: #ffffff;
+        padding: 4px 9px;
+        border-radius: 5px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        white-space: nowrap;
+        z-index: 2000;
+        pointer-events: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .tm-tile:hover .tm-tooltip {
+        display: block;
+    }
+    .tm-tile:hover .tm-tile-box {
+        outline: 2px solid rgba(0,0,0,0.55);
+        outline-offset: -2px;
     }
     .tm-logo {
         margin-bottom: 2px;
@@ -444,9 +476,12 @@ def render_treemap(title, items):
             inner += f'<div class="tm-pct" style="font-size:{max(8, min(13, min_side * 0.13)):.1f}px">{pct_txt}</div>'
 
         tooltip = f'{item["name"]} ({item["ticker"]}) {pct_txt}' if item["name"] != item["ticker"] else f'{item["ticker"]} {pct_txt}'
+        tooltip_esc = html.escape(tooltip)
         parts.append(
-            f'<div class="tm-tile" style="left:{x:.1f}px;top:{y:.1f}px;width:{w:.1f}px;height:{h:.1f}px;'
-            f'background:{bg};color:{fg};" title="{html.escape(tooltip)}">{inner}</div>'
+            f'<div class="tm-tile" style="left:{x:.1f}px;top:{y:.1f}px;width:{w:.1f}px;height:{h:.1f}px;" title="{tooltip_esc}">'
+            f'<div class="tm-tile-box" style="background:{bg};color:{fg};">{inner}</div>'
+            f'<div class="tm-tooltip">{tooltip_esc}</div>'
+            f'</div>'
         )
 
     st.markdown(f"#### {title}")
