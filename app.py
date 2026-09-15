@@ -443,9 +443,10 @@ def render_treemap(title, items):
         if show_pct:
             inner += f'<div class="tm-pct" style="font-size:{max(8, min(13, min_side * 0.13)):.1f}px">{pct_txt}</div>'
 
+        tooltip = f'{item["name"]} ({item["ticker"]}) {pct_txt}' if item["name"] != item["ticker"] else f'{item["ticker"]} {pct_txt}'
         parts.append(
             f'<div class="tm-tile" style="left:{x:.1f}px;top:{y:.1f}px;width:{w:.1f}px;height:{h:.1f}px;'
-            f'background:{bg};color:{fg};" title="{html.escape(item["ticker"])} {pct_txt}">{inner}</div>'
+            f'background:{bg};color:{fg};" title="{html.escape(tooltip)}">{inner}</div>'
         )
 
     st.markdown(f"#### {title}")
