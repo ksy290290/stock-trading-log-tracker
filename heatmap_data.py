@@ -1,0 +1,103 @@
+"""Curated large-cap ticker lists for the 히트맵 tab, plus a small ticker ->
+company-domain map used to pull a logo via Clearbit's free logo API
+(https://logo.clearbit.com/<domain>). Not every ticker has a mapped domain -
+tiles without one just render without a logo.
+
+These lists intentionally aren't the full index (500+ names) - fetching
+market cap for every constituent daily is slow and not worth it for what's
+meant to be an at-a-glance view. Rank/sort within the tab is always computed
+from live data, so this list only decides *which* large caps appear, not
+their order.
+"""
+
+# (ticker, domain) - 미국 대형주 (S&P500 시가총액 상위권 위주)
+SP500_STOCKS = [
+    ("AAPL", "apple.com"),
+    ("MSFT", "microsoft.com"),
+    ("NVDA", "nvidia.com"),
+    ("GOOGL", "abc.xyz"),
+    ("AMZN", "amazon.com"),
+    ("META", "meta.com"),
+    ("BRK-B", "berkshirehathaway.com"),
+    ("AVGO", "broadcom.com"),
+    ("TSLA", "tesla.com"),
+    ("LLY", "lilly.com"),
+    ("JPM", "jpmorganchase.com"),
+    ("V", "visa.com"),
+    ("XOM", "exxonmobil.com"),
+    ("UNH", "unitedhealthgroup.com"),
+    ("MA", "mastercard.com"),
+    ("PG", "pg.com"),
+    ("JNJ", "jnj.com"),
+    ("HD", "homedepot.com"),
+    ("COST", "costco.com"),
+    ("MRK", "merck.com"),
+    ("ABBV", "abbvie.com"),
+    ("CVX", "chevron.com"),
+    ("NFLX", "netflix.com"),
+    ("CRM", "salesforce.com"),
+    ("BAC", "bankofamerica.com"),
+    ("KO", "coca-cola.com"),
+    ("AMD", "amd.com"),
+    ("PEP", "pepsico.com"),
+    ("TMO", "thermofisher.com"),
+    ("LIN", "linde.com"),
+    ("WMT", "walmart.com"),
+    ("MCD", "mcdonalds.com"),
+    ("CSCO", "cisco.com"),
+    ("ABT", "abbott.com"),
+    ("ORCL", "oracle.com"),
+    ("ACN", "accenture.com"),
+    ("ADBE", "adobe.com"),
+    ("DHR", "danaher.com"),
+    ("WFC", "wellsfargo.com"),
+    ("QCOM", "qualcomm.com"),
+    ("TXN", "ti.com"),
+    ("INTC", "intel.com"),
+    ("IBM", "ibm.com"),
+    ("CAT", "caterpillar.com"),
+    ("GE", "ge.com"),
+    ("NOW", "servicenow.com"),
+    ("PM", "pmi.com"),
+    ("UBER", "uber.com"),
+    ("DIS", "disney.com"),
+    ("VZ", "verizon.com"),
+    ("PFE", "pfizer.com"),
+]
+
+# (ticker, name, domain-or-None) - 코스피 시가총액 상위권 위주 (외국인 인지도 높은 종목 포함)
+KOSPI_STOCKS = [
+    ("005930", "삼성전자", "samsung.com"),
+    ("000660", "SK하이닉스", "skhynix.com"),
+    ("373220", "LG에너지솔루션", "lgensol.com"),
+    ("207940", "삼성바이오로직스", "samsungbiologics.com"),
+    ("005380", "현대차", "hyundai.com"),
+    ("000270", "기아", "kia.com"),
+    ("068270", "셀트리온", "celltrion.com"),
+    ("035420", "NAVER", "navercorp.com"),
+    ("005490", "POSCO홀딩스", "posco-holdings.com"),
+    ("105560", "KB금융", "kbfg.com"),
+    ("055550", "신한지주", "shinhangroup.com"),
+    ("051910", "LG화학", "lgchem.com"),
+    ("006400", "삼성SDI", "samsungsdi.com"),
+    ("096770", "SK이노베이션", "skinnovation.com"),
+    ("012330", "현대모비스", "mobis.co.kr"),
+    ("028260", "삼성물산", "samsungcnt.com"),
+    ("086790", "하나금융지주", "hanafn.com"),
+    ("035720", "카카오", "kakaocorp.com"),
+    ("066570", "LG전자", "lge.com"),
+    ("010130", "고려아연", None),
+    ("034730", "SK", "sk.com"),
+    ("015760", "한국전력", "kepco.co.kr"),
+    ("032830", "삼성생명", "samsunglife.com"),
+    ("018260", "삼성에스디에스", "samsungsds.com"),
+    ("010950", "S-Oil", "s-oil.com"),
+    ("011200", "HMM", "hmm21.com"),
+    ("009150", "삼성전기", "samsungsem.com"),
+    ("000810", "삼성화재", "samsungfire.com"),
+    ("024110", "기업은행", "ibk.co.kr"),
+    ("316140", "우리금융지주", "woorifg.com"),
+    ("259960", "크래프톤", "krafton.com"),
+    ("352820", "하이브", "hybecorp.com"),
+    ("090430", "아모레퍼시픽", "apgroup.com"),
+]

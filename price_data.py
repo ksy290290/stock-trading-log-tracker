@@ -60,6 +60,36 @@ def get_usdkrw_rate():
     return get_price_us("KRW=X")
 
 
+def get_daily_change_batch(tickers: list):
+    """여러 티커의 전일 대비 등락률(%)을 한 번에 조회.
+
+    yf.download 배치 호출 하나로 처리해서 종목별 순차 조회보다 훨씬 빠름
+    (히트맵처럼 수십 개 종목을 한 번에 그려야 할 때 사용).
+    Returns {ticker: pct_change_float_or_None}.
+    """
+    import yfinance as yf
+
+    result = {t: None for t in tickers}
+    if not tickers:
+        return result
+    try:
+        data = yf.download(tickers, period="5d", progress=False, threads=True, group_by="ticker")
+    except Exception:
+        return result
+
+    for t in tickers:
+        try:
+            closes = data[t]["Close"].dropna() if len(tickers) > 1 else data["Close"].dropna()
+            if len(closes) < 2:
+                continue
+            prev, last = closes.iloc[-2], closes.iloc[-1]
+            if prev:
+                result[t] = float((last - prev) / prev * 100)
+        except Exception:
+            continue
+    return result
+
+
 def get_next_earnings_date_us(ticker: str):
     """다음 실적발표일 (US 종목만 - yfinance 제공). 실패/없음 시 None.
     Returns a datetime.date or None."""

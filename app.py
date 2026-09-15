@@ -11,6 +11,7 @@ import streamlit as st
 import db
 import price_data
 from analytics import chronological_key, compute_positions, total_realized_pnl, total_unrealized_pnl, win_rate
+from heatmap_data import KOSPI_STOCKS, SP500_STOCKS
 
 st.set_page_config(page_title="주식 매매일지", page_icon="📈", layout="wide")
 db.init_db()
@@ -204,6 +205,50 @@ st.markdown(
     .cal-full .cal-event {
         white-space: normal;
     }
+    .heat-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .heat-tile {
+        width: 108px;
+        height: 82px;
+        border-radius: 6px;
+        padding: 6px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        overflow: hidden;
+    }
+    .heat-logo {
+        width: 22px;
+        height: 22px;
+        margin-bottom: 2px;
+        border-radius: 4px;
+        background-color: rgba(255,255,255,0.6);
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+    }
+    .heat-name {
+        font-size: 0.65rem;
+        line-height: 1.1;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .heat-ticker {
+        font-size: 0.72rem;
+        font-weight: 700;
+    }
+    .heat-pct {
+        font-size: 0.7rem;
+        font-weight: 700;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -307,9 +352,80 @@ def suggest_name(ticker_raw, market):
     return TICKER_NAME_MAP.get(ticker, "")
 
 
-tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf, tab_ai = st.tabs(
-    ["📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석", "🤖 AI 인사이트"]
+tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf, tab_ai = st.tabs(
+    ["🔥 히트맵", "📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석", "🤖 AI 인사이트"]
 )
+
+
+# ---------------------------------------------------------------------------
+# 히트맵 (S&P500 / KOSPI, 일 1회 자동 갱신)
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=3600 * 12)
+def get_heatmap_changes(cache_key: str, tickers: tuple):
+    """cache_key에 오늘 날짜를 넣어서 하루 지나면 자동으로 새로 불러옴."""
+    return price_data.get_daily_change_batch(list(tickers))
+
+
+def _heatmap_color(pct):
+    if pct is None:
+        return "#e0e0e0", "#888"
+    pct = max(-4.0, min(4.0, pct))
+    if pct >= 0:
+        alpha = 0.15 + (pct / 4.0) * 0.85
+        return f"rgba(30,150,80,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#1a5c33"
+    alpha = 0.15 + (abs(pct) / 4.0) * 0.85
+    return f"rgba(210,50,50,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#8a1f1f"
+
+
+def render_heatmap(title, entries):
+    """entries: list of (ticker, name, domain_or_None, pct_or_None)"""
+    entries = sorted(entries, key=lambda e: (e[3] is None, -(e[3] or 0)))
+    tiles = []
+    for ticker, name, domain, pct in entries:
+        bg, fg = _heatmap_color(pct)
+        pct_txt = f"{pct:+.2f}%" if pct is not None else "N/A"
+        # <img onerror=...>는 Streamlit이 markdown 렌더링 시 인라인 on* 속성을 제거해서
+        # 동작하지 않음 -> 로고가 없을 때 깨진 이미지 아이콘이 안 뜨도록 배경이미지로 처리
+        # (배경이미지는 로드 실패 시 그냥 안 보이고 에러가 나지 않음).
+        logo_html = (
+            f'<div class="heat-logo" style="background-image:url(https://logo.clearbit.com/{domain})"></div>'
+            if domain else ""
+        )
+        name_html = "" if name == ticker else f'<div class="heat-name">{html.escape(name)}</div>'
+        tiles.append(
+            f'<div class="heat-tile" style="background:{bg};color:{fg};">'
+            f'{logo_html}'
+            f'{name_html}'
+            f'<div class="heat-ticker">{html.escape(ticker)}</div>'
+            f'<div class="heat-pct">{pct_txt}</div>'
+            f'</div>'
+        )
+    st.markdown(f"#### {title}")
+    st.markdown(f'<div class="heat-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+
+
+with tab_heatmap:
+    today_key = dt.date.today().isoformat()
+    st.caption(f"기준일: {today_key} (전일 종가 대비 등락률 · 하루 한 번 자동 갱신, 매일 첫 접속 시 새로 조회)")
+
+    sp_tickers = tuple(t for t, _ in SP500_STOCKS)
+    kr_tickers = tuple(f"{code}.KS" for code, _, _ in KOSPI_STOCKS)
+
+    with st.spinner("히트맵 데이터 불러오는 중..."):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            fut_sp = ex.submit(get_heatmap_changes, today_key, sp_tickers)
+            fut_kr = ex.submit(get_heatmap_changes, today_key, kr_tickers)
+            sp_changes = fut_sp.result()
+            kr_changes = fut_kr.result()
+
+    sp_entries = [(t, t, dom, sp_changes.get(t)) for t, dom in SP500_STOCKS]
+    kr_entries = [
+        (code, name, dom, kr_changes.get(f"{code}.KS")) for code, name, dom in KOSPI_STOCKS
+    ]
+
+    render_heatmap("🇺🇸 S&P500 (전일 대비)", sp_entries)
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    render_heatmap("🇰🇷 KOSPI (전일 대비)", kr_entries)
 
 # ---------------------------------------------------------------------------
 # 대시보드
