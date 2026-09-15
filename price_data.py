@@ -90,6 +90,29 @@ def get_daily_change_batch(tickers: list):
     return result
 
 
+def get_market_caps_batch(tickers: list, max_workers: int = 8):
+    """여러 티커의 시가총액을 병렬로 조회 (히트맵 트리맵 타일 크기 계산용).
+    Returns {ticker: market_cap_float_or_None}."""
+    import concurrent.futures
+
+    import yfinance as yf
+
+    def _one(t):
+        try:
+            cap = yf.Ticker(t).fast_info.get("marketCap")
+            return t, (float(cap) if cap else None)
+        except Exception:
+            return t, None
+
+    result = {t: None for t in tickers}
+    if not tickers:
+        return result
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for t, cap in ex.map(_one, tickers):
+            result[t] = cap
+    return result
+
+
 def get_next_earnings_date_us(ticker: str):
     """다음 실적발표일 (US 종목만 - yfinance 제공). 실패/없음 시 None.
     Returns a datetime.date or None."""

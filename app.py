@@ -11,6 +11,7 @@ import streamlit as st
 import db
 import price_data
 from analytics import chronological_key, compute_positions, total_realized_pnl, total_unrealized_pnl, win_rate
+import treemap
 from heatmap_data import KOSPI_STOCKS, SP500_STOCKS
 
 st.set_page_config(page_title="주식 매매일지", page_icon="📈", layout="wide")
@@ -205,48 +206,58 @@ st.markdown(
     .cal-full .cal-event {
         white-space: normal;
     }
-    .heat-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-    .heat-tile {
-        width: 108px;
-        height: 82px;
+    .tm-canvas {
+        position: relative;
+        max-width: 100%;
+        overflow-x: auto;
+        background: #fafafa;
         border-radius: 6px;
-        padding: 6px;
+    }
+    .tm-sector-header {
+        position: absolute;
         box-sizing: border-box;
+        background: #eef0f3;
+        color: #333333;
+        font-weight: 700;
+        font-size: 0.68rem;
+        display: flex;
+        align-items: center;
+        padding-left: 6px;
+        border-radius: 3px 3px 0 0;
+        overflow: hidden;
+        white-space: nowrap;
+    }
+    .tm-tile {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1px solid rgba(255,255,255,0.5);
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
         text-align: center;
         overflow: hidden;
+        line-height: 1.15;
     }
-    .heat-logo {
-        width: 22px;
-        height: 22px;
+    .tm-logo {
         margin-bottom: 2px;
         border-radius: 4px;
-        background-color: rgba(255,255,255,0.6);
+        /* 배경색을 두지 않음: 로고 로드에 실패해도(예: 로고 CDN 접속 차단) 빈 흰 사각형이
+           아니라 그냥 아무것도 안 보이게 하기 위함 */
         background-size: contain;
         background-repeat: no-repeat;
         background-position: center;
     }
-    .heat-name {
-        font-size: 0.65rem;
-        line-height: 1.1;
+    .tm-name {
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    .heat-ticker {
-        font-size: 0.72rem;
+    .tm-ticker {
         font-weight: 700;
     }
-    .heat-pct {
-        font-size: 0.7rem;
+    .tm-pct {
         font-weight: 700;
     }
     </style>
@@ -358,12 +369,21 @@ tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets
 
 
 # ---------------------------------------------------------------------------
-# 히트맵 (S&P500 / KOSPI, 일 1회 자동 갱신)
+# 히트맵 (S&P500 / KOSPI, 섹터별 트리맵, 일 1회 자동 갱신)
 # ---------------------------------------------------------------------------
+TM_CANVAS_W, TM_CANVAS_H = 1150, 620
+TM_FALLBACK_CAP = 5_000_000_000  # 시가총액 조회 실패 시 대체값 (5B) - 타일이 거의 안 보이게 찌그러지는 것 방지
+
+
 @st.cache_data(ttl=3600 * 12)
 def get_heatmap_changes(cache_key: str, tickers: tuple):
     """cache_key에 오늘 날짜를 넣어서 하루 지나면 자동으로 새로 불러옴."""
     return price_data.get_daily_change_batch(list(tickers))
+
+
+@st.cache_data(ttl=3600 * 12)
+def get_heatmap_caps(cache_key: str, tickers: tuple):
+    return price_data.get_market_caps_batch(list(tickers))
 
 
 def _heatmap_color(pct):
@@ -377,55 +397,101 @@ def _heatmap_color(pct):
     return f"rgba(210,50,50,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#8a1f1f"
 
 
-def render_heatmap(title, entries):
-    """entries: list of (ticker, name, domain_or_None, pct_or_None)"""
-    entries = sorted(entries, key=lambda e: (e[3] is None, -(e[3] or 0)))
-    tiles = []
-    for ticker, name, domain, pct in entries:
+def render_treemap(title, items):
+    """items: list of dicts {ticker, name, domain, sector, pct, cap}"""
+    sector_rects, item_rects = treemap.layout_grouped(
+        items,
+        key_size=lambda i: i["cap"] or TM_FALLBACK_CAP,
+        key_group=lambda i: i["sector"],
+        canvas_w=TM_CANVAS_W,
+        canvas_h=TM_CANVAS_H,
+    )
+
+    parts = []
+    for s in sector_rects:
+        if s["w"] < 1 or s["h"] < 1:
+            continue
+        header_h = min(20, s["h"] * 0.4)
+        parts.append(
+            f'<div class="tm-sector-header" style="left:{s["x"]:.1f}px;top:{s["y"]:.1f}px;'
+            f'width:{s["w"]:.1f}px;height:{header_h:.1f}px;">{html.escape(s["name"])}</div>'
+        )
+
+    for item, x, y, w, h in item_rects:
+        if w < 1 or h < 1:
+            continue
+        pct = item["pct"]
         bg, fg = _heatmap_color(pct)
         pct_txt = f"{pct:+.2f}%" if pct is not None else "N/A"
-        # <img onerror=...>는 Streamlit이 markdown 렌더링 시 인라인 on* 속성을 제거해서
-        # 동작하지 않음 -> 로고가 없을 때 깨진 이미지 아이콘이 안 뜨도록 배경이미지로 처리
-        # (배경이미지는 로드 실패 시 그냥 안 보이고 에러가 나지 않음).
-        logo_html = (
-            f'<div class="heat-logo" style="background-image:url(https://logo.clearbit.com/{domain})"></div>'
-            if domain else ""
+        min_side = min(w, h)
+        show_ticker = min_side >= 18
+        show_pct = min_side >= 26
+        show_name = w >= 75 and h >= 60 and item["name"] != item["ticker"]
+        show_logo = item["domain"] and w >= 52 and h >= 52
+
+        inner = ""
+        if show_logo:
+            logo_size = max(16, min(28, min_side * 0.28))
+            inner += (
+                f'<div class="tm-logo" style="width:{logo_size:.0f}px;height:{logo_size:.0f}px;'
+                f'background-image:url(https://logo.clearbit.com/{item["domain"]})"></div>'
+            )
+        if show_name:
+            inner += f'<div class="tm-name" style="font-size:{min(11, min_side * 0.09):.1f}px">{html.escape(item["name"])}</div>'
+        if show_ticker:
+            inner += f'<div class="tm-ticker" style="font-size:{max(9, min(18, min_side * 0.17)):.1f}px">{html.escape(item["ticker"])}</div>'
+        if show_pct:
+            inner += f'<div class="tm-pct" style="font-size:{max(8, min(13, min_side * 0.13)):.1f}px">{pct_txt}</div>'
+
+        parts.append(
+            f'<div class="tm-tile" style="left:{x:.1f}px;top:{y:.1f}px;width:{w:.1f}px;height:{h:.1f}px;'
+            f'background:{bg};color:{fg};" title="{html.escape(item["ticker"])} {pct_txt}">{inner}</div>'
         )
-        name_html = "" if name == ticker else f'<div class="heat-name">{html.escape(name)}</div>'
-        tiles.append(
-            f'<div class="heat-tile" style="background:{bg};color:{fg};">'
-            f'{logo_html}'
-            f'{name_html}'
-            f'<div class="heat-ticker">{html.escape(ticker)}</div>'
-            f'<div class="heat-pct">{pct_txt}</div>'
-            f'</div>'
-        )
+
     st.markdown(f"#### {title}")
-    st.markdown(f'<div class="heat-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="tm-canvas" style="width:{TM_CANVAS_W}px;height:{TM_CANVAS_H}px;">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 with tab_heatmap:
     today_key = dt.date.today().isoformat()
-    st.caption(f"기준일: {today_key} (전일 종가 대비 등락률 · 하루 한 번 자동 갱신, 매일 첫 접속 시 새로 조회)")
+    st.caption(f"기준일: {today_key} (전일 종가 대비 등락률 · 섹터별 트리맵, 타일 크기 = 시가총액 · 하루 한 번 자동 갱신)")
 
-    sp_tickers = tuple(t for t, _ in SP500_STOCKS)
-    kr_tickers = tuple(f"{code}.KS" for code, _, _ in KOSPI_STOCKS)
+    sp_tickers = tuple(t for t, _, _ in SP500_STOCKS)
+    kr_tickers = tuple(f"{code}.KS" for code, _, _, _ in KOSPI_STOCKS)
 
-    with st.spinner("히트맵 데이터 불러오는 중..."):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            fut_sp = ex.submit(get_heatmap_changes, today_key, sp_tickers)
-            fut_kr = ex.submit(get_heatmap_changes, today_key, kr_tickers)
-            sp_changes = fut_sp.result()
-            kr_changes = fut_kr.result()
+    with st.spinner("히트맵 데이터 불러오는 중... (시가총액 포함이라 첫 로딩은 다소 걸릴 수 있어요)"):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            fut_sp_chg = ex.submit(get_heatmap_changes, today_key, sp_tickers)
+            fut_kr_chg = ex.submit(get_heatmap_changes, today_key, kr_tickers)
+            fut_sp_cap = ex.submit(get_heatmap_caps, today_key, sp_tickers)
+            fut_kr_cap = ex.submit(get_heatmap_caps, today_key, kr_tickers)
+            sp_changes = fut_sp_chg.result()
+            kr_changes = fut_kr_chg.result()
+            sp_caps = fut_sp_cap.result()
+            kr_caps = fut_kr_cap.result()
 
-    sp_entries = [(t, t, dom, sp_changes.get(t)) for t, dom in SP500_STOCKS]
-    kr_entries = [
-        (code, name, dom, kr_changes.get(f"{code}.KS")) for code, name, dom in KOSPI_STOCKS
+    sp_items = [
+        {"ticker": t, "name": t, "domain": dom, "sector": sector, "pct": sp_changes.get(t), "cap": sp_caps.get(t)}
+        for t, dom, sector in SP500_STOCKS
+    ]
+    kr_items = [
+        {
+            "ticker": code,
+            "name": name,
+            "domain": dom,
+            "sector": sector,
+            "pct": kr_changes.get(f"{code}.KS"),
+            "cap": kr_caps.get(f"{code}.KS"),
+        }
+        for code, name, dom, sector in KOSPI_STOCKS
     ]
 
-    render_heatmap("🇺🇸 S&P500 (전일 대비)", sp_entries)
+    render_treemap("🇺🇸 S&P500 (전일 대비, 섹터/시가총액별)", sp_items)
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-    render_heatmap("🇰🇷 KOSPI (전일 대비)", kr_entries)
+    render_treemap("🇰🇷 KOSPI (전일 대비, 섹터/시가총액별)", kr_items)
 
 # ---------------------------------------------------------------------------
 # 대시보드
