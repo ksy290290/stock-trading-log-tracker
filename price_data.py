@@ -61,12 +61,19 @@ def get_usdkrw_rate():
 
 
 def get_daily_change_batch(tickers: list):
-    """여러 티커의 전일 대비 등락률(%)을 한 번에 조회.
+    """여러 티커의 '가장 최근에 완결된 거래일'의 전일 대비 등락률(%)을 한 번에 조회.
 
     yf.download 배치 호출 하나로 처리해서 종목별 순차 조회보다 훨씬 빠름
     (히트맵처럼 수십 개 종목을 한 번에 그려야 할 때 사용).
+
+    장중에 조회하면 yfinance가 반환하는 마지막 일봉이 '오늘' 날짜의 아직 진행 중인
+    (장 마감 전) 가격일 수 있음 - 이걸 그대로 쓰면 하루 1번만 캐싱하는 히트맵이 "장중
+    스냅샷"을 하루 종일 고정해서 보여주게 됨. 그래서 마지막 봉의 날짜가 오늘이면 제외하고,
+    그 앞의 완결된 두 봉으로 등락률을 계산 - 언제 조회하든 항상 "전일 종가 대비" 값이 되게 함.
     Returns {ticker: pct_change_float_or_None}.
     """
+    import datetime as dt
+
     import yfinance as yf
 
     result = {t: None for t in tickers}
@@ -77,9 +84,12 @@ def get_daily_change_batch(tickers: list):
     except Exception:
         return result
 
+    today = dt.date.today()
     for t in tickers:
         try:
             closes = data[t]["Close"].dropna() if len(tickers) > 1 else data["Close"].dropna()
+            if len(closes) and closes.index[-1].date() == today:
+                closes = closes.iloc[:-1]
             if len(closes) < 2:
                 continue
             prev, last = closes.iloc[-2], closes.iloc[-1]
