@@ -833,6 +833,29 @@ with tab_calendar:
     month_sell_usd = sum(v["sell_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
     month_div_krw = sum(v["div_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
 
+    # 이번 달 매수/매도 종목별 합계 (종목명, 수량, 금액)
+    month_buy_by_ticker = defaultdict(lambda: {"qty": 0.0, "krw": 0.0, "usd": 0.0, "name": None})
+    month_sell_by_ticker = defaultdict(lambda: {"qty": 0.0, "krw": 0.0, "usd": 0.0, "name": None})
+    for t in cal_trades:
+        if not t["trade_date"].startswith(month_prefix):
+            continue
+        bucket = (month_buy_by_ticker if t["side"] == "BUY" else month_sell_by_ticker)[t["ticker"]]
+        bucket["qty"] += t["quantity"]
+        bucket["krw"] += t["quantity"] * t["price"]
+        bucket["name"] = t["name"] or t["ticker"]
+        if t["market"] == "US" and t["fx_rate"]:
+            bucket["usd"] += (t["quantity"] * t["price"]) / t["fx_rate"]
+
+    def _ticker_amount_lines(bucket):
+        lines = []
+        for b in sorted(bucket.values(), key=lambda b: -b["krw"]):
+            usd_txt = f" (${b['usd']:,.0f})" if b["usd"] else ""
+            lines.append(f"{b['name']} {fmt_qty(b['qty'])}주 {fmt(b['krw'])}원{usd_txt}")
+        return lines
+
+    buy_ticker_lines = _ticker_amount_lines(month_buy_by_ticker)
+    sell_ticker_lines = _ticker_amount_lines(month_sell_by_ticker)
+
     # 이번 달 판매(매도) 손익: 종목별 sell_records를 이번 달 것만 모아 손익/원가 합산
     month_sell_pnl = defaultdict(lambda: {"pnl": 0.0, "cost": 0.0, "name": None})
     for ticker, pos in cal_positions.items():
@@ -858,10 +881,10 @@ with tab_calendar:
     mcol1, mcol2, mcol3, mcol4 = st.columns(4)
     with mcol1:
         buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
-        metric_card("매수", buy_val, "#E8F0FE")
+        metric_card("매수", buy_val, "#E8F0FE", sublines=buy_ticker_lines)
     with mcol2:
         sell_val = fmt(month_sell_krw) + (f" (${month_sell_usd:,.0f})" if month_sell_usd else "")
-        metric_card("매도", sell_val, "#FCE8E6")
+        metric_card("매도", sell_val, "#FCE8E6", sublines=sell_ticker_lines)
     with mcol3:
         metric_card("판매 수익", sell_pnl_val, "#F3E8FD", sublines=sell_pnl_lines)
     with mcol4:
