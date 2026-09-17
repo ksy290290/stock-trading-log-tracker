@@ -99,6 +99,14 @@ st.markdown(
         font-weight: 700;
         color: #000000;
     }
+    .metric-card .metric-sub {
+        margin-top: 6px;
+        font-size: 0.78rem;
+        color: #333333;
+    }
+    .metric-card .metric-sub div {
+        margin-bottom: 2px;
+    }
     .cal-grid {
         width: 100%;
         border-collapse: collapse;
@@ -324,22 +332,49 @@ def fmt_qty(x):
     return f"{x:,.4f}".rstrip("0").rstrip(".")
 
 
-def render_table(df, scroll=False, extra_class=""):
+def render_table(df, scroll=False, extra_class="", raw_html_columns=None):
     """검정/볼드 컬럼명을 보장하기 위해 st.dataframe 대신 스타일링된 HTML 표로 렌더링.
     (st.dataframe은 캔버스로 그려져서 CSS로 헤더 스타일을 바꿀 수 없음)
-    행이 줄바꿈되지 않게 해서(white-space: nowrap) 국내/해외 표의 행 높이가 맞도록 함."""
+    행이 줄바꿈되지 않게 해서(white-space: nowrap) 국내/해외 표의 행 높이가 맞도록 함.
+
+    raw_html_columns: 이미 안전하게 이스케이프된 HTML(예: colorize_pnl 결과)을 담고 있어
+    추가 이스케이프하면 안 되는 컬럼명 목록. 그 외 컬럼은 전부 이스케이프됨."""
+    raw_html_columns = set(raw_html_columns or [])
     classes = f"jnl-table {extra_class}".strip()
-    html = df.to_html(index=False, escape=True, border=0, classes=classes)
+    header_html = "".join(f"<th>{html.escape(str(c))}</th>" for c in df.columns)
+    body_rows = []
+    for _, row in df.iterrows():
+        cells = []
+        for col in df.columns:
+            val = row[col]
+            text = "" if val is None else str(val)
+            cells.append(f"<td>{text if col in raw_html_columns else html.escape(text)}</td>")
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+    table_html = f'<table border="0" class="{classes}"><thead><tr>{header_html}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
     if scroll:
-        html = f'<div class="jnl-table-scroll">{html}</div>'
-    st.markdown(f'<div class="jnl-table-wrap">{html}</div>', unsafe_allow_html=True)
+        table_html = f'<div class="jnl-table-scroll">{table_html}</div>'
+    st.markdown(f'<div class="jnl-table-wrap">{table_html}</div>', unsafe_allow_html=True)
 
 
-def metric_card(label, value, color):
+def colorize_pnl(text, value):
+    """양수면 빨간색, 음수면 파란색으로 감싼 안전한(escape된) HTML 문자열 반환.
+    value가 None/0이면 색 없이 그대로."""
+    escaped = html.escape(text)
+    if value is None or value == 0:
+        return escaped
+    color = "#d32f2f" if value > 0 else "#1565c0"
+    return f'<span style="color:{color};">{escaped}</span>'
+
+
+def metric_card(label, value, color, sublines=None):
+    sub_html = ""
+    if sublines:
+        sub_html = '<div class="metric-sub">' + "".join(f"<div>{html.escape(s)}</div>" for s in sublines) + "</div>"
     st.markdown(
         f'<div class="metric-card" style="background-color:{color};">'
         f'<div class="metric-label">{html.escape(label)}</div>'
         f'<div class="metric-value">{html.escape(value)}</div>'
+        f"{sub_html}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -590,8 +625,8 @@ with tab_dashboard:
                 "평단가": fmt(avg_cost),
                 "현재가": fmt(price) if price is not None else "조회 실패",
                 "평가금": fmt(eval_amount),
-                "평가손익": fmt(pnl) if pnl is not None else "-",
-                "평가손익(%)": f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-",
+                "평가손익": colorize_pnl(fmt(pnl) if pnl is not None else "-", pnl),
+                "평가손익(%)": colorize_pnl(f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-", pnl_pct),
                 "비고": holding_notes.get(ticker) or "",
             }
             (holdings_kr if pos["market"] == "KR" else holdings_us).append(entry)
@@ -605,7 +640,7 @@ with tab_dashboard:
                 entries, key=lambda e: e["eval_amount"] if e["eval_amount"] is not None else -1, reverse=True
             )
             df = pd.DataFrame(entries_sorted).drop(columns=["eval_amount", "market", "ticker"])
-            render_table(df, extra_class="holdings-table")
+            render_table(df, extra_class="holdings-table", raw_html_columns=["평가손익", "평가손익(%)"])
             return entries_sorted
 
         kr_sorted = render_holdings("🇰🇷 국내", holdings_kr)
@@ -789,15 +824,39 @@ with tab_calendar:
     month_sell_usd = sum(v["sell_usd"] for k, v in day_totals.items() if k.startswith(month_prefix))
     month_div_krw = sum(v["div_krw"] for k, v in day_totals.items() if k.startswith(month_prefix))
 
-    mcol1, mcol2, mcol3 = st.columns(3)
+    # 이번 달 판매(매도) 손익: 종목별 sell_records를 이번 달 것만 모아 손익/원가 합산
+    month_sell_pnl = defaultdict(lambda: {"pnl": 0.0, "cost": 0.0, "name": None})
+    for ticker, pos in cal_positions.items():
+        for sr in pos["sell_records"]:
+            if sr["date"].startswith(month_prefix):
+                bucket = month_sell_pnl[ticker]
+                bucket["pnl"] += sr["pnl"]
+                bucket["cost"] += sr["cost_basis"] * sr["quantity"]
+                bucket["name"] = pos["name"] or ticker
+    total_sell_pnl = sum(v["pnl"] for v in month_sell_pnl.values())
+    total_sell_cost = sum(v["cost"] for v in month_sell_pnl.values())
+    total_sell_pct = (total_sell_pnl / total_sell_cost * 100) if total_sell_cost else None
+
+    sell_pnl_val = f"{total_sell_pnl:+,.0f}원" if month_sell_pnl else "0원"
+    if total_sell_pct is not None:
+        sell_pnl_val += f" ({total_sell_pct:+.1f}%)"
+    sell_pnl_lines = []
+    for v in sorted(month_sell_pnl.values(), key=lambda v: -v["pnl"]):
+        pct = (v["pnl"] / v["cost"] * 100) if v["cost"] else None
+        pct_txt = f" ({pct:+.1f}%)" if pct is not None else ""
+        sell_pnl_lines.append(f"{v['name']} {v['pnl']:+,.0f}{pct_txt}")
+
+    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
     with mcol1:
         buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
-        metric_card(f"{st.session_state.cal_month}월 누적 매수", buy_val, "#E8F0FE")
+        metric_card("매수", buy_val, "#E8F0FE")
     with mcol2:
         sell_val = fmt(month_sell_krw) + (f" (${month_sell_usd:,.0f})" if month_sell_usd else "")
-        metric_card(f"{st.session_state.cal_month}월 누적 매도", sell_val, "#FCE8E6")
+        metric_card("매도", sell_val, "#FCE8E6")
     with mcol3:
-        metric_card(f"{st.session_state.cal_month}월 누적 배당금", fmt(month_div_krw), "#E6F4EA")
+        metric_card("판매 수익", sell_pnl_val, "#F3E8FD", sublines=sell_pnl_lines)
+    with mcol4:
+        metric_card("배당금", fmt(month_div_krw), "#E6F4EA")
 
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
