@@ -321,6 +321,15 @@ def fmt(x):
     return f"{x:,.0f}"
 
 
+def fmt_signed(x):
+    """손익용: fmt과 동일하되 양수에도 +를 붙여서 +/- 정렬이 맞도록 함."""
+    if x is None:
+        return "-"
+    if isinstance(x, str):
+        return x
+    return f"{x:+,.0f}"
+
+
 def fmt_qty(x):
     """수량용: 1,000 단위 콤마는 넣되, 소수(분할매수 등)는 그대로 살려서 표시."""
     if x is None:
@@ -625,7 +634,7 @@ with tab_dashboard:
                 "평단가": fmt(avg_cost),
                 "현재가": fmt(price) if price is not None else "조회 실패",
                 "평가금": fmt(eval_amount),
-                "평가손익": colorize_pnl(fmt(pnl) if pnl is not None else "-", pnl),
+                "평가손익": colorize_pnl(fmt_signed(pnl) if pnl is not None else "-", pnl),
                 "평가손익(%)": colorize_pnl(f"{pnl_pct:+.2f}%" if pnl_pct is not None else "-", pnl_pct),
                 "비고": holding_notes.get(ticker) or "",
             }
