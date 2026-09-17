@@ -707,10 +707,10 @@ with tab_calendar:
 
     cal_trades = db.get_trades()
     cal_dividends = db.get_dividends()
-    events_by_date = defaultdict(list)  # date_str -> [(text, color)]
+    events_by_date = defaultdict(list)  # date_str -> [(text, color, amount_krw)] - amount는 정렬용
 
     # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
-    trade_groups = defaultdict(lambda: {"qty": 0.0, "name": None})
+    trade_groups = defaultdict(lambda: {"qty": 0.0, "amount": 0.0, "name": None})
     # 날짜별 매수/매도/배당 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
     day_totals = defaultdict(
         lambda: {"buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0, "div_krw": 0.0}
@@ -721,13 +721,14 @@ with tab_calendar:
         trade_groups[key]["name"] = t["name"] or t["ticker"]
         side_key = "buy" if t["side"] == "BUY" else "sell"
         amount_krw = t["quantity"] * t["price"]
+        trade_groups[key]["amount"] += amount_krw
         day_totals[t["trade_date"]][f"{side_key}_krw"] += amount_krw
         if t["market"] == "US" and t["fx_rate"]:
             day_totals[t["trade_date"]][f"{side_key}_usd"] += amount_krw / t["fx_rate"]
     for (cdate, cticker, cside), g in trade_groups.items():
         label = "매수" if cside == "BUY" else "매도"
         color = "#3D9DF3" if cside == "BUY" else "#FF6C6C"
-        events_by_date[cdate].append((f"{label} {g['name']} {fmt_qty(g['qty'])}", color))
+        events_by_date[cdate].append((f"{label} {g['name']} {fmt_qty(g['qty'])}", color, g["amount"]))
 
     # 배당 (같은 날짜/티커 합산)
     div_groups = defaultdict(lambda: {"amount": 0.0, "name": None})
@@ -736,7 +737,7 @@ with tab_calendar:
         div_groups[key]["amount"] += d["amount"]
         div_groups[key]["name"] = d["name"] or d["ticker"]
     for (cdate, cticker), g in div_groups.items():
-        events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#3DD56D"))
+        events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#3DD56D", g["amount"]))
         day_totals[cdate]["div_krw"] += g["amount"]
 
     # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
@@ -757,7 +758,7 @@ with tab_calendar:
                     edate = future.result()
                     if edate:
                         ename = cal_positions[eticker]["name"] or eticker
-                        events_by_date[edate].append((f"실적발표 {ename}", "#B073FF"))
+                        events_by_date[edate].append((f"실적발표 {ename}", "#B073FF", 0.0))
 
     if "cal_year" not in st.session_state:
         _today = dt.date.today()
@@ -791,12 +792,12 @@ with tab_calendar:
         _rows.append("<tr>")
         for day in week:
             in_month = day.month == st.session_state.cal_month
-            evs = events_by_date.get(day.isoformat(), [])
+            evs = sorted(events_by_date.get(day.isoformat(), []), key=lambda e: -e[2])
             cell_class = "cal-dim" if not in_month else ""
-            ev_html = "".join(render_cal_event(t, c) for t, c in evs[:4])
+            ev_html = "".join(render_cal_event(t, c) for t, c, _ in evs[:4])
             details_html = ""
             if len(evs) > 4:
-                full_items = "".join(render_cal_event(t, c) for t, c in evs)
+                full_items = "".join(render_cal_event(t, c) for t, c, _ in evs)
                 details_html = (
                     f"<details class=\"cal-details\"><summary>+{len(evs) - 4}건 더</summary>"
                     f'<div class="cal-full">'
@@ -856,6 +857,22 @@ with tab_calendar:
     buy_ticker_lines = _ticker_amount_lines(month_buy_by_ticker)
     sell_ticker_lines = _ticker_amount_lines(month_sell_by_ticker)
 
+    # 이번 달 배당금 종목별 합계
+    month_div_by_ticker = defaultdict(lambda: {"krw": 0.0, "usd": 0.0, "name": None})
+    for d in cal_dividends:
+        if not d["pay_date"].startswith(month_prefix):
+            continue
+        bucket = month_div_by_ticker[d["ticker"]]
+        bucket["krw"] += d["amount"]
+        bucket["name"] = d["name"] or d["ticker"]
+        if d["market"] == "US" and d["fx_rate"]:
+            bucket["usd"] += d["amount"] / d["fx_rate"]
+
+    div_ticker_lines = []
+    for b in sorted(month_div_by_ticker.values(), key=lambda b: -b["krw"]):
+        usd_txt = f" (${b['usd']:,.2f})" if b["usd"] else ""
+        div_ticker_lines.append(f"{b['name']} {fmt(b['krw'])}원{usd_txt}")
+
     # 이번 달 판매(매도) 손익: 종목별 sell_records를 이번 달 것만 모아 손익/원가 합산
     month_sell_pnl = defaultdict(lambda: {"pnl": 0.0, "cost": 0.0, "name": None})
     for ticker, pos in cal_positions.items():
@@ -888,7 +905,7 @@ with tab_calendar:
     with mcol3:
         metric_card("판매 수익", sell_pnl_val, "#F3E8FD", sublines=sell_pnl_lines)
     with mcol4:
-        metric_card("배당금", fmt(month_div_krw), "#E6F4EA")
+        metric_card("배당금", fmt(month_div_krw), "#E6F4EA", sublines=div_ticker_lines)
 
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
