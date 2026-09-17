@@ -950,6 +950,64 @@ with tab_trades:
             db.delete_trade(int(del_id))
             st.success(f"ID {del_id} 삭제 완료")
             st.rerun()
+
+        st.markdown("**기록 수정**")
+        edit_trade_id = st.number_input("수정할 기록 ID", min_value=0, step=1, value=0, key="edit_trade_id")
+        if edit_trade_id > 0:
+            target = next((t for t in trades if t["id"] == int(edit_trade_id)), None)
+            if target is None:
+                st.warning(f"ID {int(edit_trade_id)} 기록을 찾을 수 없습니다.")
+            else:
+                e_currency = "USD" if target["market"] == "US" else "원"
+                st.caption(f"시장: {market_label(target['market'])} (수정 불가 - 시장을 바꾸려면 삭제 후 다시 등록해주세요)")
+                if target["market"] == "US" and target["fx_rate"]:
+                    disp_price = target["price"] / target["fx_rate"]
+                    disp_fee = (target["fee"] or 0) / target["fx_rate"]
+                    disp_tax = (target["tax"] or 0) / target["fx_rate"]
+                else:
+                    disp_price, disp_fee, disp_tax = target["price"], target["fee"] or 0, target["tax"] or 0
+                with st.form(f"edit_trade_form_{int(edit_trade_id)}"):
+                    e_ticker = st.text_input("티커/종목코드", value=target["ticker"])
+                    e_name = st.text_input("종목명", value=target["name"] or "")
+                    ecol1, ecol2, ecol3 = st.columns(3)
+                    e_side = ecol1.selectbox(
+                        "구분", ["BUY", "SELL"], index=0 if target["side"] == "BUY" else 1,
+                        format_func=lambda s: "매수" if s == "BUY" else "매도",
+                    )
+                    e_quantity = ecol2.number_input("수량", min_value=0.0, value=float(target["quantity"]), step=1.0)
+                    e_price = ecol3.number_input(f"체결가 ({e_currency})", min_value=0.0, value=float(disp_price), step=1.0)
+                    ecol4, ecol5 = st.columns(2)
+                    e_fee = ecol4.number_input(f"수수료 ({e_currency})", min_value=0.0, value=float(disp_fee), step=0.1)
+                    e_tax = ecol5.number_input(f"거래세 ({e_currency})", min_value=0.0, value=float(disp_tax), step=0.1)
+                    e_trade_date = st.date_input("거래일", value=dt.date.fromisoformat(target["trade_date"]))
+                    e_strategy_tag = st.text_input("전략/태그", value=target["strategy_tag"] or "")
+                    e_thesis = st.text_area("매매 사유/근거", value=target["thesis"] or "")
+                    save_trade = st.form_submit_button("수정 저장")
+                    if save_trade:
+                        e_market = target["market"]
+                        fx_rate = None
+                        price_krw, fee_krw, tax_krw = e_price, e_fee, e_tax
+                        if e_market == "US":
+                            fx_rate = cached_usdkrw()
+                            if fx_rate:
+                                price_krw, fee_krw, tax_krw = e_price * fx_rate, e_fee * fx_rate, e_tax * fx_rate
+                        db.update_trade(
+                            int(edit_trade_id),
+                            e_ticker.strip().upper() if e_market == "US" else e_ticker.strip(),
+                            e_name.strip() or None,
+                            e_market,
+                            e_side,
+                            e_quantity,
+                            price_krw,
+                            fee_krw,
+                            tax_krw,
+                            fx_rate,
+                            e_trade_date.isoformat(),
+                            e_strategy_tag.strip() or None,
+                            e_thesis.strip() or None,
+                        )
+                        st.success(f"ID {int(edit_trade_id)} 수정 완료")
+                        st.rerun()
     else:
         st.caption("기록이 없습니다.")
 
@@ -961,14 +1019,18 @@ with tab_dividends:
     col1, col2 = st.columns(2)
     d_market = col1.selectbox("시장", MARKETS, format_func=market_label, key="d_market")
     d_ticker = col2.text_input("티커/종목코드", key="d_ticker")
+    d_currency = "USD" if d_market == "US" else "원"
+    if d_market == "US":
+        st.caption("해외 종목은 입금액/원천징수세액을 달러(USD) 기준으로 입력하세요 (원화는 자동 환산).")
+
     with st.form("dividend_form", clear_on_submit=True):
         d_name = st.text_input(
             "종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(d_ticker, d_market), key="d_name"
         )
 
         col4, col5, col6 = st.columns(3)
-        d_amount = col4.number_input("입금액 (세후 실수령액)", min_value=0.0, step=100.0)
-        d_tax = col5.number_input("원천징수세액 (선택)", min_value=0.0, step=100.0, value=0.0)
+        d_amount = col4.number_input(f"입금액 (세후 실수령액, {d_currency})", min_value=0.0, step=100.0)
+        d_tax = col5.number_input(f"원천징수세액 (선택, {d_currency})", min_value=0.0, step=100.0, value=0.0)
         d_date = col6.date_input("입금일", value=dt.date.today(), key="d_date")
 
         d_note = st.text_input("메모 (선택)")
@@ -977,14 +1039,21 @@ with tab_dividends:
             if not d_ticker or d_amount <= 0:
                 st.error("티커와 입금액은 필수입니다.")
             else:
+                fx_rate = None
+                amount_krw, tax_krw = d_amount, d_tax
+                if d_market == "US":
+                    fx_rate = cached_usdkrw()
+                    if fx_rate:
+                        amount_krw, tax_krw = d_amount * fx_rate, d_tax * fx_rate
                 db.add_dividend(
                     d_ticker.strip().upper() if d_market == "US" else d_ticker.strip(),
                     d_name.strip() or None,
                     d_market,
                     d_date.isoformat(),
-                    d_amount,
-                    d_tax,
+                    amount_krw,
+                    tax_krw,
                     d_note.strip() or None,
+                    fx_rate,
                 )
                 st.success("배당금 기록을 추가했습니다.")
                 st.rerun()
@@ -993,9 +1062,16 @@ with tab_dividends:
     dividends = db.get_dividends()
     if dividends:
         ddf = pd.DataFrame([dict(d) for d in dividends])
-        ddf["market"] = ddf["market"].map(market_label)
         display_df = ddf.copy()
-        display_df["amount"] = display_df["amount"].apply(fmt)
+        display_df["market"] = display_df["market"].map(market_label)
+
+        def _amount_with_usd(row):
+            text = fmt(row["amount"])
+            if row["market"] == market_label("US") and row.get("fx_rate"):
+                text += f" (${row['amount'] / row['fx_rate']:,.2f})"
+            return text
+
+        display_df["amount"] = display_df.apply(_amount_with_usd, axis=1)
         display_df["tax"] = display_df["tax"].apply(fmt)
         render_table(
             display_df[["id", "pay_date", "market", "ticker", "name", "amount", "tax", "note"]],
@@ -1006,6 +1082,55 @@ with tab_dividends:
             db.delete_dividend(int(del_div_id))
             st.success(f"ID {del_div_id} 삭제 완료")
             st.rerun()
+
+        st.markdown("**배당 기록 수정**")
+        edit_div_id = st.number_input("수정할 배당 기록 ID", min_value=0, step=1, value=0, key="edit_div_id")
+        if edit_div_id > 0:
+            d_target = next((d for d in dividends if d["id"] == int(edit_div_id)), None)
+            if d_target is None:
+                st.warning(f"ID {int(edit_div_id)} 기록을 찾을 수 없습니다.")
+            else:
+                ed_currency = "USD" if d_target["market"] == "US" else "원"
+                st.caption(f"시장: {market_label(d_target['market'])} (수정 불가 - 시장을 바꾸려면 삭제 후 다시 등록해주세요)")
+                if d_target["market"] == "US" and d_target["fx_rate"]:
+                    disp_amount = d_target["amount"] / d_target["fx_rate"]
+                    disp_tax = (d_target["tax"] or 0) / d_target["fx_rate"]
+                else:
+                    disp_amount, disp_tax = d_target["amount"], d_target["tax"] or 0
+                with st.form(f"edit_dividend_form_{int(edit_div_id)}"):
+                    ed_ticker = st.text_input("티커/종목코드", value=d_target["ticker"])
+                    ed_name = st.text_input("종목명", value=d_target["name"] or "")
+                    ecol1, ecol2, ecol3 = st.columns(3)
+                    ed_amount = ecol1.number_input(
+                        f"입금액 ({ed_currency})", min_value=0.0, value=float(disp_amount), step=100.0
+                    )
+                    ed_tax = ecol2.number_input(
+                        f"원천징수세액 ({ed_currency})", min_value=0.0, value=float(disp_tax), step=100.0
+                    )
+                    ed_date = ecol3.date_input("입금일", value=dt.date.fromisoformat(d_target["pay_date"]))
+                    ed_note = st.text_input("메모", value=d_target["note"] or "")
+                    save_div = st.form_submit_button("수정 저장")
+                    if save_div:
+                        ed_market = d_target["market"]
+                        fx_rate = None
+                        amount_krw, tax_krw = ed_amount, ed_tax
+                        if ed_market == "US":
+                            fx_rate = cached_usdkrw()
+                            if fx_rate:
+                                amount_krw, tax_krw = ed_amount * fx_rate, ed_tax * fx_rate
+                        db.update_dividend(
+                            int(edit_div_id),
+                            ed_ticker.strip().upper() if ed_market == "US" else ed_ticker.strip(),
+                            ed_name.strip() or None,
+                            ed_market,
+                            ed_date.isoformat(),
+                            amount_krw,
+                            tax_krw,
+                            ed_note.strip() or None,
+                            fx_rate,
+                        )
+                        st.success(f"ID {int(edit_div_id)} 수정 완료")
+                        st.rerun()
 
         st.subheader("종목별 누적 배당금")
         by_ticker = ddf.groupby(["ticker", "name"], dropna=False)["amount"].sum().reset_index()

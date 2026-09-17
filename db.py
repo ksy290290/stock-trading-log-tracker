@@ -82,13 +82,17 @@ def init_db():
             name TEXT,
             market TEXT NOT NULL,
             pay_date TEXT NOT NULL,
-            amount REAL NOT NULL,       -- 세후 실수령액 기준
-            tax REAL DEFAULT 0,
+            amount REAL NOT NULL,       -- 세후 실수령액, 항상 KRW 기준
+            tax REAL DEFAULT 0,         -- 항상 KRW 기준
+            fx_rate REAL,               -- 해외 배당 입금 시점 원/달러 환율 (국내는 NULL)
             note TEXT,
             created_at TEXT NOT NULL
         )
         """
     )
+    existing_div_cols = {row["name"] for row in cur.execute("PRAGMA table_info(dividends)").fetchall()}
+    if "fx_rate" not in existing_div_cols:
+        cur.execute("ALTER TABLE dividends ADD COLUMN fx_rate REAL")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS holding_notes (
@@ -127,6 +131,20 @@ def get_trades():
 def delete_trade(trade_id):
     conn = get_conn()
     conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_trade(trade_id, ticker, name, market, side, quantity, price, fee, tax, fx_rate, trade_date,
+                  strategy_tag, thesis):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE trades SET ticker = ?, name = ?, market = ?, side = ?, quantity = ?, price = ?,
+                              fee = ?, tax = ?, fx_rate = ?, trade_date = ?, strategy_tag = ?, thesis = ?
+           WHERE id = ?""",
+        (ticker, name, market, side, quantity, price, fee, tax, fx_rate, trade_date, strategy_tag, thesis,
+         trade_id),
+    )
     conn.commit()
     conn.close()
 
@@ -190,12 +208,24 @@ def get_journal(category=None):
     return rows
 
 
-def add_dividend(ticker, name, market, pay_date, amount, tax, note):
+def add_dividend(ticker, name, market, pay_date, amount, tax, note, fx_rate=None):
     conn = get_conn()
     conn.execute(
-        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, note, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, name, market, pay_date, amount, tax, note, datetime.now().isoformat()),
+        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, fx_rate, note, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_dividend(dividend_id, ticker, name, market, pay_date, amount, tax, note, fx_rate=None):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE dividends SET ticker = ?, name = ?, market = ?, pay_date = ?, amount = ?,
+                                 tax = ?, fx_rate = ?, note = ?
+           WHERE id = ?""",
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, dividend_id),
     )
     conn.commit()
     conn.close()
