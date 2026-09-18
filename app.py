@@ -275,7 +275,18 @@ st.markdown(
         box-shadow: var(--shadow);
         /* overflow를 auto/hidden으로 두면 CSS 스펙상 overflow-x/y가 서로 묶여서
            타일 hover 툴팁(position:absolute, 타일 바깥으로 튀어나옴)이 잘림 ->
-           캘린더 팝업 때와 동일한 문제라 일부러 overflow를 지정하지 않음(기본 visible). */
+           캘린더 팝업 때와 동일한 문제라 데스크톱 너비에서는 일부러 overflow를
+           지정하지 않음(기본 visible). */
+    }
+    /* 폰 너비에서는 터치라 hover 툴팁 자체가 의미 없으니(터치로는 :hover가 안 걸림),
+       대신 좌우 스크롤이 되게 함 - 안 그러면 조상 요소의 overflow:hidden 때문에
+       캔버스 오른쪽이 그냥 잘려서 아예 안 보이는 채로 스크롤도 안 됨. */
+    @media (max-width: 640px) {
+        .tm-canvas {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            max-width: 100%;
+        }
     }
     .tm-sector-header {
         position: absolute;
