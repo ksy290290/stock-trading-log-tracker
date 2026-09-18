@@ -582,6 +582,487 @@ def suggest_name(ticker_raw, market):
     return TICKER_NAME_MAP.get(ticker, "")
 
 
+def compute_perf_rows(trades, all_dividends, period, selected_month):
+    """성과분석 표에 쓰이는 종목별 행을 계산 (데스크톱 tab_perf와 모바일 성과분석 화면이
+    공유). 반환값의 숫자는 포맷팅 전 원시 값 - 표시 직전에 각자 fmt()/fmt_signed() 적용."""
+    positions = compute_positions(trades)
+    rows = []
+    if period == "전체":
+        dividends_by_ticker = defaultdict(float)
+        for d in all_dividends:
+            dividends_by_ticker[d["ticker"]] += d["amount"]
+        for ticker, pos in positions.items():
+            realized = pos["realized_pnl"]
+            price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
+            unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
+            dividend = dividends_by_ticker.get(ticker, 0.0)
+            total = realized + unrealized + dividend
+            rows.append(
+                {
+                    "_sort": total,
+                    "종목": pos["name"] or ticker,
+                    "티커": ticker,
+                    "실현손익": realized,
+                    "평가손익": unrealized,
+                    "배당금": dividend,
+                    "합계": total,
+                    "매도횟수": len(pos["sell_records"]),
+                }
+            )
+    else:
+        # 월별 뷰: 평가손익은 "그 달의 실적"이라는 개념이 없어(항상 현재 시점 스냅샷) 제외하고,
+        # 그 달에 실제로 발생한 실현손익/배당만 집계. 평단가(원가)는 전체 이력 기준 positions를
+        # 그대로 참조하므로, 이전 달 매수분을 이번 달에 판 경우도 원가가 정확함.
+        realized_by_ticker = defaultdict(float)
+        sell_count_by_ticker = defaultdict(int)
+        for ticker, pos in positions.items():
+            for s in pos["sell_records"]:
+                if s["date"].startswith(selected_month):
+                    realized_by_ticker[ticker] += s["pnl"]
+                    sell_count_by_ticker[ticker] += 1
+        dividends_by_ticker = defaultdict(float)
+        for d in all_dividends:
+            if d["pay_date"].startswith(selected_month):
+                dividends_by_ticker[d["ticker"]] += d["amount"]
+        for ticker in sorted(set(realized_by_ticker) | set(dividends_by_ticker)):
+            pos = positions.get(ticker, {})
+            realized = realized_by_ticker.get(ticker, 0.0)
+            dividend = dividends_by_ticker.get(ticker, 0.0)
+            total = realized + dividend
+            rows.append(
+                {
+                    "_sort": total,
+                    "종목": pos.get("name") or ticker,
+                    "티커": ticker,
+                    "실현손익": realized,
+                    "배당금": dividend,
+                    "합계": total,
+                    "매도횟수": sell_count_by_ticker.get(ticker, 0),
+                }
+            )
+    return rows
+
+
+def compute_perf_cum_data(trades, period, selected_month):
+    """누적 실현손익 추이 차트용 데이터 (데스크톱/모바일 공유)."""
+    chrono = sorted(trades, key=chronological_key)
+    cum_data = []
+    running_positions = {}
+    cum = 0.0
+    for t in chrono:
+        key = t["ticker"]
+        if key not in running_positions:
+            running_positions[key] = {"qty": 0.0, "avg_cost": 0.0}
+        p = running_positions[key]
+        if t["side"] == "BUY":
+            total_cost = p["qty"] * p["avg_cost"] + t["quantity"] * t["price"] + (t["fee"] or 0)
+            p["qty"] += t["quantity"]
+            p["avg_cost"] = total_cost / p["qty"] if p["qty"] else 0.0
+        else:
+            pnl = (t["price"] - p["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
+            p["qty"] -= t["quantity"]
+            # 월별 뷰에서는 선택한 달의 매도만 누적해서, "이번 달 실현손익이 어떻게 쌓였는지"를
+            # 보여줌 (전체 이력 누적값이 아니라 그 달 시작을 0으로 보는 누적)
+            if period == "전체" or t["trade_date"].startswith(selected_month):
+                cum += pnl
+                cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})
+    return cum_data
+
+
+# ---------------------------------------------------------------------------
+# 폰 전용 UI - PC는 기존 대시보드(위 탭 9개) 그대로, 폰은 핵심 4개(매매일지/캘린더/
+# 성과분석/설정)만 네이티브 앱처럼 카드 + 하단 탭바로 재구성. User-Agent로 서버에서
+# 바로 분기해서 PC/폰이 서로 다른 화면을 받도록 함 (같은 URL, 같은 데이터).
+# ---------------------------------------------------------------------------
+MOBILE_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');
+.stApp { background: #F7F5F2; font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif; }
+.block-container { padding: 0 12px 110px 12px !important; max-width: 100% !important; }
+header[data-testid="stHeader"] { background: transparent; }
+.stock-m-header { padding: 8px 4px 14px 4px; }
+.stock-m-header h1 { margin: 0; font-size: 22px; font-weight: 800; color: #14151A; letter-spacing: -0.3px; }
+.stock-m-header span { font-size: 13px; color: #6B7280; }
+.stock-m-card { background: #FFFFFF; border: 1px solid #ECEBE7; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; }
+.stock-m-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stock-m-card-title { font-size: 15px; font-weight: 700; color: #14151A; }
+.stock-m-badge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; flex-shrink: 0; }
+.stock-m-card-detail { display: block; font-size: 13px; color: #6B7280; margin-top: 6px; }
+.stock-m-tag { display: block; font-size: 12px; font-weight: 600; color: #4F46E5; margin-top: 4px; }
+.stock-m-section-title { font-size: 14px; font-weight: 700; color: #374151; margin: 4px 0 10px 4px; }
+.stock-m-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stock-m-summary-card { background: #FFFFFF; border: 1px solid #ECEBE7; border-radius: 14px; padding: 14px 16px; }
+.stock-m-summary-label { display: block; font-size: 12px; color: #6B7280; font-weight: 600; margin-bottom: 6px; }
+.stock-m-summary-value { display: block; font-size: 19px; font-weight: 800; }
+.stock-m-perf-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #FFFFFF; border: 1px solid #ECEBE7; border-radius: 12px; padding: 14px 16px; margin-bottom: 8px; }
+.stock-m-perf-name { font-size: 14px; font-weight: 700; color: #14151A; }
+.stock-m-perf-detail { font-size: 12px; color: #6B7280; margin-top: 4px; }
+.stock-m-perf-total { font-size: 14px; font-weight: 800; flex-shrink: 0; }
+.stock-m-cal-title { text-align: center; font-size: 17px; font-weight: 800; color: #14151A; padding-top: 4px; }
+.stock-m-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border: 1px solid #ECEBE7; border-radius: 12px; overflow: hidden; background: #FFFFFF; margin-top: 12px; }
+.stock-m-cal-head { border-right: 1px solid #ECEBE7; border-bottom: 1px solid #ECEBE7; padding: 8px 0; text-align: center; font-size: 12px; font-weight: 700; color: #9CA3AF; background: #FAFAF8; }
+.stock-m-cal-cell { border-right: 1px solid #ECEBE7; border-bottom: 1px solid #ECEBE7; padding: 6px 4px; min-height: 58px; display: flex; flex-direction: column; gap: 3px; }
+.stock-m-cal-day { font-size: 12px; font-weight: 700; color: #14151A; }
+.stock-m-cal-dim { background: #FAFAF8; }
+.stock-m-cal-dim .stock-m-cal-day { color: #C7C5C0; }
+.stock-m-cal-tag { font-size: 9px; font-weight: 700; color: #FFFFFF; border-radius: 5px; padding: 1px 4px; text-align: center; line-height: 1.5; }
+.stock-m-cal-legend { display: flex; gap: 14px; padding: 12px 4px 0 4px; }
+.stock-m-cal-legend span { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #6B7280; }
+.stock-m-cal-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.st-key-mobile_cal_nav div[data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; align-items: center !important; gap: 6px !important; }
+.st-key-mobile_cal_nav div[data-testid="stColumn"] { min-width: 0 !important; }
+.st-key-mobile_cal_nav button { padding: 6px 10px !important; }
+.st-key-mobile_fab_wrap { position: fixed; right: 18px; bottom: 92px; z-index: 999; width: 56px; }
+.st-key-mobile_fab_wrap button { width: 56px !important; height: 56px !important; border-radius: 28px !important;
+    background: #4F46E5 !important; color: #FFFFFF !important; font-size: 15px !important; border: none !important;
+    box-shadow: 0 6px 14px rgba(79,70,229,0.35) !important; padding: 0 !important; }
+.st-key-mobile_bottom_nav { position: fixed; left: 0; right: 0; bottom: 0; background: #FFFFFF;
+    border-top: 1px solid #E8E6E1; padding: 6px 6px calc(env(safe-area-inset-bottom) + 6px) 6px; z-index: 1000; }
+.st-key-mobile_bottom_nav div[data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 4px !important; }
+.st-key-mobile_bottom_nav div[data-testid="stColumn"] { min-width: 0 !important; }
+.st-key-mobile_bottom_nav button { font-size: 10px !important; padding: 8px 2px !important; white-space: nowrap; }
+</style>
+"""
+
+
+def mobile_header(title, subtitle):
+    st.markdown(
+        f'<div class="stock-m-header"><h1>{html.escape(title)}</h1><span>{html.escape(subtitle)}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+@st.dialog("매매 기록 추가")
+def mobile_add_trade_dialog():
+    market = st.radio("시장", ["국내", "해외"], horizontal=True, key="madd_market")
+    side = st.radio("매매 구분", ["매수", "매도"], horizontal=True, key="madd_side")
+    ticker = st.text_input("종목 코드", key="madd_ticker")
+    market_code = "KR" if market == "국내" else "US"
+    name = st.text_input("종목명", value=suggest_name(ticker, market_code), key="madd_name")
+    c1, c2 = st.columns(2)
+    qty = c1.number_input("수량", min_value=0.0, step=1.0, key="madd_qty")
+    price = c2.number_input("가격", min_value=0.0, step=1.0, key="madd_price")
+    c3, c4 = st.columns(2)
+    fee = c3.number_input("수수료", min_value=0.0, step=1.0, key="madd_fee")
+    tax = c4.number_input("세금", min_value=0.0, step=1.0, key="madd_tax")
+    fx_rate = None
+    if market == "해외":
+        fx_rate = st.number_input("체결 시점 환율 (선택, 0=미입력)", min_value=0.0, step=0.1, key="madd_fx")
+    trade_date = st.date_input("거래일", key="madd_date")
+    strategy_tag = st.text_input("전략 태그 (선택)", key="madd_tag")
+    thesis = st.text_area("매매 사유 (선택)", key="madd_thesis")
+
+    col_submit, col_cancel = st.columns(2)
+    if col_submit.button("추가", type="primary", use_container_width=True, key="madd_submit"):
+        if not ticker.strip() or qty <= 0 or price <= 0:
+            st.warning("종목 코드, 수량, 가격을 확인해주세요.")
+        else:
+            db.add_trade(
+                ticker.strip(), name.strip() or None, market_code,
+                "BUY" if side == "매수" else "SELL", qty, price, fee, trade_date.isoformat(),
+                strategy_tag.strip() or None, thesis.strip() or None,
+                tax=tax, fx_rate=(fx_rate if fx_rate else None),
+            )
+            st.session_state.mobile_add_open = False
+            st.rerun()
+    if col_cancel.button("취소", use_container_width=True, key="madd_cancel"):
+        st.session_state.mobile_add_open = False
+        st.rerun()
+
+
+@st.dialog("매매 기록 수정")
+def mobile_edit_trade_dialog(trade_id):
+    t = next((x for x in db.get_trades() if x["id"] == trade_id), None)
+    if t is None:
+        st.warning("기록을 찾을 수 없습니다.")
+        return
+    market = st.radio("시장", ["국내", "해외"], horizontal=True, index=0 if t["market"] == "KR" else 1, key="medit_market")
+    side = st.radio("매매 구분", ["매수", "매도"], horizontal=True, index=0 if t["side"] == "BUY" else 1, key="medit_side")
+    ticker = st.text_input("종목 코드", value=t["ticker"], key="medit_ticker")
+    name = st.text_input("종목명", value=t["name"] or "", key="medit_name")
+    c1, c2 = st.columns(2)
+    qty = c1.number_input("수량", min_value=0.0, value=float(t["quantity"]), step=1.0, key="medit_qty")
+    price = c2.number_input("가격", min_value=0.0, value=float(t["price"]), step=1.0, key="medit_price")
+    c3, c4 = st.columns(2)
+    fee = c3.number_input("수수료", min_value=0.0, value=float(t["fee"] or 0), step=1.0, key="medit_fee")
+    tax = c4.number_input("세금", min_value=0.0, value=float(t["tax"] or 0), step=1.0, key="medit_tax")
+    fx_rate = None
+    if market == "해외":
+        fx_rate = st.number_input(
+            "체결 시점 환율 (선택, 0=미입력)", min_value=0.0, value=float(t["fx_rate"] or 0), step=0.1, key="medit_fx"
+        )
+    trade_date = st.date_input("거래일", value=dt.date.fromisoformat(t["trade_date"]), key="medit_date")
+    strategy_tag = st.text_input("전략 태그 (선택)", value=t["strategy_tag"] or "", key="medit_tag")
+    thesis = st.text_area("매매 사유 (선택)", value=t["thesis"] or "", key="medit_thesis")
+
+    col_save, col_delete, col_cancel = st.columns(3)
+    if col_save.button("저장", type="primary", use_container_width=True, key="medit_save"):
+        db.update_trade(
+            trade_id, ticker.strip(), name.strip() or None, "KR" if market == "국내" else "US",
+            "BUY" if side == "매수" else "SELL", qty, price, fee, tax,
+            (fx_rate if fx_rate else None), trade_date.isoformat(),
+            strategy_tag.strip() or None, thesis.strip() or None,
+        )
+        st.session_state.mobile_edit_trade_id = None
+        st.rerun()
+    if col_delete.button("삭제", use_container_width=True, key="medit_delete"):
+        db.delete_trade(trade_id)
+        st.session_state.mobile_edit_trade_id = None
+        st.rerun()
+    if col_cancel.button("취소", use_container_width=True, key="medit_cancel"):
+        st.session_state.mobile_edit_trade_id = None
+        st.rerun()
+
+
+def render_mobile_trades():
+    trades = db.get_trades()
+    positions = compute_positions(trades)
+    holding_count = sum(1 for p in positions.values() if p["qty"] > 0)
+    this_month = dt.date.today().isoformat()[:7]
+    month_trade_count = sum(1 for t in trades if t["trade_date"].startswith(this_month))
+    mobile_header("매매일지", f"보유 {holding_count}종목 · 이번 달 거래 {month_trade_count}건")
+
+    if not trades:
+        st.info("아직 기록이 없습니다. 오른쪽 아래 + 버튼으로 첫 매매를 기록해보세요.")
+    else:
+        for t in trades[:30]:
+            side_label = "매수" if t["side"] == "BUY" else "매도"
+            badge_bg, badge_fg = ("#FEE2E2", "#B91C1C") if t["side"] == "BUY" else ("#DBEAFE", "#1D4ED8")
+            price_unit = "$" if t["market"] == "US" else "원"
+            name_label = f"{t['name']} ({t['ticker']})" if t["name"] else t["ticker"]
+            tag_html = (
+                f'<span class="stock-m-tag">#{html.escape(t["strategy_tag"])}</span>' if t["strategy_tag"] else ""
+            )
+            card_col, btn_col = st.columns([5, 1])
+            with card_col:
+                st.markdown(
+                    f'<div class="stock-m-card">'
+                    f'<div class="stock-m-card-head">'
+                    f'<span class="stock-m-card-title">{html.escape(name_label)}</span>'
+                    f'<span class="stock-m-badge" style="background:{badge_bg};color:{badge_fg};">{side_label}</span>'
+                    f"</div>"
+                    f'<span class="stock-m-card-detail">{t["trade_date"]} · {fmt_qty(t["quantity"])}주 · '
+                    f'{fmt(t["price"])}{price_unit}</span>{tag_html}</div>',
+                    unsafe_allow_html=True,
+                )
+            with btn_col:
+                if st.button("", icon=":material/edit:", key=f"mobile_edit_{t['id']}", help="수정"):
+                    st.session_state.mobile_edit_trade_id = t["id"]
+                    st.rerun()
+        if len(trades) > 30:
+            st.caption(f"최근 30건만 표시 중 (전체 {len(trades)}건 - PC에서 전체 조회 가능)")
+
+    with st.container(key="mobile_fab_wrap"):
+        if st.button("＋", key="mobile_fab_btn", help="매매 기록 추가"):
+            st.session_state.mobile_add_open = True
+            st.rerun()
+
+    if st.session_state.get("mobile_add_open"):
+        mobile_add_trade_dialog()
+    if st.session_state.get("mobile_edit_trade_id"):
+        mobile_edit_trade_dialog(st.session_state.mobile_edit_trade_id)
+
+
+def render_mobile_calendar():
+    if "mobile_cal_year" not in st.session_state:
+        _today = dt.date.today()
+        st.session_state.mobile_cal_year = _today.year
+        st.session_state.mobile_cal_month = _today.month
+
+    mobile_header("캘린더", "매매 · 배당 일정을 한눈에")
+
+    day_totals = defaultdict(lambda: {"buy": 0.0, "sell": 0.0, "div": 0.0})
+    for t in db.get_trades():
+        key = "buy" if t["side"] == "BUY" else "sell"
+        day_totals[t["trade_date"]][key] += t["quantity"] * t["price"]
+    for d in db.get_dividends():
+        day_totals[d["pay_date"]]["div"] += d["amount"]
+
+    with st.container(key="mobile_cal_nav"):
+        c1, c2, c3 = st.columns([1, 3, 1])
+        if c1.button("◀", key="mobile_cal_prev"):
+            m, y = st.session_state.mobile_cal_month - 1, st.session_state.mobile_cal_year
+            if m < 1:
+                m, y = 12, y - 1
+            st.session_state.mobile_cal_month, st.session_state.mobile_cal_year = m, y
+            st.rerun()
+        c2.markdown(
+            f'<div class="stock-m-cal-title">{st.session_state.mobile_cal_year}년 '
+            f'{st.session_state.mobile_cal_month}월</div>',
+            unsafe_allow_html=True,
+        )
+        if c3.button("▶", key="mobile_cal_next"):
+            m, y = st.session_state.mobile_cal_month + 1, st.session_state.mobile_cal_year
+            if m > 12:
+                m, y = 1, y + 1
+            st.session_state.mobile_cal_month, st.session_state.mobile_cal_year = m, y
+            st.rerun()
+
+    weeks = calendar_module.Calendar(firstweekday=6).monthdatescalendar(
+        st.session_state.mobile_cal_year, st.session_state.mobile_cal_month
+    )
+    cells = ['<div class="stock-m-cal-grid">']
+    for wd in ["일", "월", "화", "수", "목", "금", "토"]:
+        cells.append(f'<div class="stock-m-cal-head">{wd}</div>')
+    for week in weeks:
+        for day in week:
+            in_month = day.month == st.session_state.mobile_cal_month
+            tot = day_totals.get(day.isoformat())
+            tag = ""
+            if tot:
+                if tot["buy"] > 0:
+                    tag = '<span class="stock-m-cal-tag" style="background:#3182F6;">매수</span>'
+                elif tot["sell"] > 0:
+                    tag = '<span class="stock-m-cal-tag" style="background:#F04452;">매도</span>'
+                elif tot["div"] > 0:
+                    tag = '<span class="stock-m-cal-tag" style="background:#16A34A;">배당</span>'
+            dim_class = " stock-m-cal-dim" if not in_month else ""
+            cells.append(f'<div class="stock-m-cal-cell{dim_class}"><span class="stock-m-cal-day">{day.day}</span>{tag}</div>')
+    cells.append("</div>")
+    st.markdown("".join(cells), unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="stock-m-cal-legend">'
+        '<span><i style="background:#3182F6;"></i>매수</span>'
+        '<span><i style="background:#F04452;"></i>매도</span>'
+        '<span><i style="background:#16A34A;"></i>배당</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_mobile_perf():
+    mobile_header("성과분석", "내 투자 성과를 한눈에")
+    trades = db.get_trades()
+    if not trades:
+        st.info("매매 기록이 없어 분석할 내용이 없습니다.")
+        return
+
+    all_dividends = db.get_dividends()
+    month_options = sorted(
+        {t["trade_date"][:7] for t in trades} | {d["pay_date"][:7] for d in all_dividends},
+        reverse=True,
+    )
+    period = st.radio("기간", ["전체", "월별"], horizontal=True, key="mobile_perf_period")
+    selected_month = st.selectbox("월 선택", month_options, key="mobile_perf_month") if period == "월별" else None
+
+    rows = compute_perf_rows(trades, all_dividends, period, selected_month)
+    total_realized = sum(r["실현손익"] for r in rows)
+    total_dividend = sum(r["배당금"] for r in rows)
+    total_sum = sum(r["합계"] for r in rows)
+    sell_count = sum(r["매도횟수"] for r in rows)
+
+    def summary_card(label, value_html):
+        return (
+            f'<div class="stock-m-summary-card"><span class="stock-m-summary-label">{label}</span>'
+            f'<span class="stock-m-summary-value">{value_html}</span></div>'
+        )
+
+    def signed_html(x):
+        color = "#DC2626" if x >= 0 else "#2563EB"
+        return f'<span style="color:{color};">{fmt_signed(round(x, 0))}원</span>'
+
+    if period == "전체":
+        positions = compute_positions(trades)
+        total_unrealized = sum(r.get("평가손익", 0) for r in rows)
+        wr = win_rate(positions)
+        cards_html = (
+            summary_card("총 실현손익", signed_html(total_realized))
+            + summary_card("총 평가손익", signed_html(total_unrealized))
+            + summary_card("승률", f"{wr:.0%}" if wr is not None else "-")
+            + summary_card("총 거래 건수", f"{len(trades)}건")
+        )
+    else:
+        cards_html = (
+            summary_card("이 달 실현손익", signed_html(total_realized))
+            + summary_card("이 달 배당금", signed_html(total_dividend))
+            + summary_card("이 달 합계", signed_html(total_sum))
+            + summary_card("이 달 매도 건수", f"{sell_count}건")
+        )
+    st.markdown(f'<div class="stock-m-summary-grid">{cards_html}</div>', unsafe_allow_html=True)
+
+    title_suffix = f" ({selected_month})" if selected_month else ""
+    st.markdown(f'<div class="stock-m-section-title">종목별 손익{title_suffix}</div>', unsafe_allow_html=True)
+    if not rows:
+        st.caption("해당 기간에 표시할 데이터가 없습니다.")
+    else:
+        for r in sorted(rows, key=lambda r: -r["_sort"]):
+            detail_bits = [f'실현손익 {fmt_signed(round(r["실현손익"], 0))}원']
+            if "평가손익" in r:
+                detail_bits.append(f'평가손익 {fmt_signed(round(r["평가손익"], 0))}원')
+            detail_bits.append(f'배당금 {fmt(round(r["배당금"], 0))}원')
+            total_color = "#DC2626" if r["합계"] >= 0 else "#2563EB"
+            st.markdown(
+                f'<div class="stock-m-perf-row"><div>'
+                f'<div class="stock-m-perf-name">{html.escape(r["종목"])} ({html.escape(r["티커"])})</div>'
+                f'<div class="stock-m-perf-detail">{" · ".join(detail_bits)}</div></div>'
+                f'<div class="stock-m-perf-total" style="color:{total_color};">'
+                f'{fmt_signed(round(r["합계"], 0))}원</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
+def render_mobile_settings():
+    mobile_header("설정", "앱 정보 및 추가 기능")
+    st.markdown(
+        '<div class="stock-m-card">'
+        '<span class="stock-m-card-title">더 많은 기능은 PC에서</span>'
+        '<span class="stock-m-card-detail">히트맵, 배당금, 목표가/손절가, 노트, AI 인사이트는 '
+        "아직 폰 화면에 없어요. 같은 주소를 PC 브라우저로 열면 전체 기능을 쓸 수 있습니다."
+        "</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_mobile_app():
+    st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    if "mobile_tab" not in st.session_state:
+        st.session_state.mobile_tab = "trades"
+
+    current_tab = st.session_state.mobile_tab
+    if current_tab == "trades":
+        render_mobile_trades()
+    elif current_tab == "calendar":
+        render_mobile_calendar()
+    elif current_tab == "perf":
+        render_mobile_perf()
+    else:
+        render_mobile_settings()
+
+    with st.container(key="mobile_bottom_nav"):
+        nav_items = [
+            ("trades", "매매일지", ":material/receipt_long:"),
+            ("calendar", "캘린더", ":material/calendar_month:"),
+            ("perf", "성과분석", ":material/insights:"),
+            ("settings", "설정", ":material/settings:"),
+        ]
+        nav_cols = st.columns(4)
+        for col, (key, label, icon) in zip(nav_cols, nav_items):
+            with col:
+                if st.button(
+                    label,
+                    key=f"mobile_nav_{key}",
+                    icon=icon,
+                    type="primary" if current_tab == key else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state.mobile_tab = key
+                    st.rerun()
+
+
+def _detect_mobile():
+    try:
+        ua = (st.context.headers.get("User-Agent") or "").lower()
+    except Exception:
+        return False
+    return any(k in ua for k in ("iphone", "android", "mobile", "ipad"))
+
+
+if _detect_mobile():
+    render_mobile_app()
+    st.stop()
+
+
 tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf, tab_ai = st.tabs(
     ["🔥 히트맵", "📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석", "🤖 AI 인사이트"]
 )
@@ -1492,62 +1973,13 @@ with tab_perf:
         selected_month = st.selectbox("월 선택", month_options, key="perf_month") if period == "월별" else None
         title_suffix = f" ({selected_month})" if selected_month else ""
 
-        positions = compute_positions(trades)  # 평단가는 항상 전체 매매 이력 기준으로 계산 (월별 필터와 무관)
-
-        rows = []
-        if period == "전체":
-            dividends_by_ticker = defaultdict(float)
-            for d in all_dividends:
-                dividends_by_ticker[d["ticker"]] += d["amount"]
-            for ticker, pos in positions.items():
-                realized = pos["realized_pnl"]
-                price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
-                unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
-                dividend = dividends_by_ticker.get(ticker, 0.0)
-                total = realized + unrealized + dividend
-                rows.append(
-                    {
-                        "_sort": total,
-                        "종목": pos["name"] or ticker,
-                        "티커": ticker,
-                        "실현손익": fmt(round(realized, 0)),
-                        "평가손익": fmt(round(unrealized, 0)),
-                        "배당금": fmt(round(dividend, 0)),
-                        "합계": fmt(round(total, 0)),
-                        "매도횟수": len(pos["sell_records"]),
-                    }
-                )
-        else:
-            # 월별 뷰: 평가손익은 "그 달의 실적"이라는 개념이 없어(항상 현재 시점 스냅샷) 제외하고,
-            # 그 달에 실제로 발생한 실현손익/배당만 집계. 평단가(원가)는 위에서 이미 전체 이력으로 계산해둔
-            # positions를 그대로 참조하므로, 이전 달 매수분을 이번 달에 판 경우도 원가가 정확함.
-            realized_by_ticker = defaultdict(float)
-            sell_count_by_ticker = defaultdict(int)
-            for ticker, pos in positions.items():
-                for s in pos["sell_records"]:
-                    if s["date"].startswith(selected_month):
-                        realized_by_ticker[ticker] += s["pnl"]
-                        sell_count_by_ticker[ticker] += 1
-            dividends_by_ticker = defaultdict(float)
-            for d in all_dividends:
-                if d["pay_date"].startswith(selected_month):
-                    dividends_by_ticker[d["ticker"]] += d["amount"]
-            for ticker in sorted(set(realized_by_ticker) | set(dividends_by_ticker)):
-                pos = positions.get(ticker, {})
-                realized = realized_by_ticker.get(ticker, 0.0)
-                dividend = dividends_by_ticker.get(ticker, 0.0)
-                total = realized + dividend
-                rows.append(
-                    {
-                        "_sort": total,
-                        "종목": pos.get("name") or ticker,
-                        "티커": ticker,
-                        "실현손익": fmt(round(realized, 0)),
-                        "배당금": fmt(round(dividend, 0)),
-                        "합계": fmt(round(total, 0)),
-                        "매도횟수": sell_count_by_ticker.get(ticker, 0),
-                    }
-                )
+        rows = compute_perf_rows(trades, all_dividends, period, selected_month)
+        for r in rows:
+            r["실현손익"] = fmt(round(r["실현손익"], 0))
+            if "평가손익" in r:
+                r["평가손익"] = fmt(round(r["평가손익"], 0))
+            r["배당금"] = fmt(round(r["배당금"], 0))
+            r["합계"] = fmt(round(r["합계"], 0))
 
         st.subheader(f"종목별 손익{title_suffix}" + (" (배당금 포함)" if period == "전체" else ""))
         if not rows:
@@ -1557,27 +1989,7 @@ with tab_perf:
             render_table(df, scroll=True)
 
         st.subheader(f"누적 실현손익 추이{title_suffix}")
-        chrono = sorted(trades, key=chronological_key)
-        cum_data = []
-        running_positions = {}
-        cum = 0.0
-        for t in chrono:
-            key = t["ticker"]
-            if key not in running_positions:
-                running_positions[key] = {"qty": 0.0, "avg_cost": 0.0}
-            p = running_positions[key]
-            if t["side"] == "BUY":
-                total_cost = p["qty"] * p["avg_cost"] + t["quantity"] * t["price"] + (t["fee"] or 0)
-                p["qty"] += t["quantity"]
-                p["avg_cost"] = total_cost / p["qty"] if p["qty"] else 0.0
-            else:
-                pnl = (t["price"] - p["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
-                p["qty"] -= t["quantity"]
-                # 월별 뷰에서는 선택한 달의 매도만 누적해서, "이번 달 실현손익이 어떻게 쌓였는지"를 보여줌
-                # (전체 이력 누적값이 아니라 그 달 시작을 0으로 보는 누적)
-                if period == "전체" or t["trade_date"].startswith(selected_month):
-                    cum += pnl
-                    cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})
+        cum_data = compute_perf_cum_data(trades, period, selected_month)
         if cum_data:
             chart_df = pd.DataFrame(cum_data)
             chart = (
