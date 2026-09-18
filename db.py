@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -5,7 +6,109 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "stock_journal.db"
 
 
+def _turso_config():
+    """(url, token) - Streamlit secrets(배포 환경)나 환경변수(로컬 스크립트용) 중
+    설정된 쪽에서 읽어옴. 둘 다 없으면 (None, None) -> 로컬 SQLite 파일로 동작
+    (지금까지의 로컬 개발/테스트 방식 그대로)."""
+    try:
+        import streamlit as st
+
+        turso = st.secrets.get("turso")
+        if turso and turso.get("url") and turso.get("token"):
+            return turso["url"], turso["token"]
+    except Exception:
+        pass
+    url = os.environ.get("TURSO_DATABASE_URL")
+    token = os.environ.get("TURSO_AUTH_TOKEN")
+    if url and token:
+        return url, token
+    return None, None
+
+
+class _Row(tuple):
+    """sqlite3.Row 대체품 (libsql은 row_factory를 지원하지 않아서 직접 구현) -
+    row['col']과 row[0] 둘 다 되고 dict(row)도 되게 해서, 로컬/Turso 어느 쪽으로
+    연결되든 db.py 나머지 함수와 app.py가 코드 변경 없이 그대로 동작하게 함."""
+
+    def __new__(cls, values, cols):
+        obj = super().__new__(cls, values)
+        obj._cols = cols
+        return obj
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return tuple.__getitem__(self, self._cols.index(key))
+        return tuple.__getitem__(self, key)
+
+    def keys(self):
+        return list(self._cols)
+
+
+class _TursoCursor:
+    def __init__(self, raw_cursor):
+        self._cur = raw_cursor
+
+    def execute(self, sql, params=()):
+        self._cur.execute(sql, params)
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        self._cur.executemany(sql, seq_of_params)
+        return self
+
+    def executescript(self, sql):
+        self._cur.executescript(sql)
+        return self
+
+    def _row(self, raw):
+        cols = tuple(d[0] for d in self._cur.description)
+        return _Row(raw, cols)
+
+    def fetchall(self):
+        return [self._row(r) for r in self._cur.fetchall()]
+
+    def fetchone(self):
+        r = self._cur.fetchone()
+        return self._row(r) if r is not None else None
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def lastrowid(self):
+        return self._cur.lastrowid
+
+
+class _TursoConnection:
+    """libsql 연결을 sqlite3.Connection과 거의 같은 인터페이스로 감싸서, 이 파일의
+    나머지 코드가 로컬 SQLite인지 Turso인지 신경 쓸 필요 없게 함."""
+
+    def __init__(self, url, token):
+        import libsql
+
+        self._conn = libsql.connect(database=url, auth_token=token)
+
+    def cursor(self):
+        return _TursoCursor(self._conn.cursor())
+
+    def execute(self, sql, params=()):
+        return self.cursor().execute(sql, params)
+
+    def executemany(self, sql, seq_of_params):
+        return self.cursor().executemany(sql, seq_of_params)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
 def get_conn():
+    url, token = _turso_config()
+    if url and token:
+        return _TursoConnection(url, token)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn

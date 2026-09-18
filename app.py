@@ -99,7 +99,7 @@ st.markdown(
     /* 국내/해외 표가 서로 같은 컬럼 순서를 쓰므로, 폭을 완전히 고정해(table-layout:fixed)
        내용 길이와 무관하게 두 표의 가로 크기가 항상 똑같게 함 */
     .holdings-table {
-        width: 1240px !important;
+        width: 1440px !important;
         table-layout: fixed;
     }
     .holdings-table td, .holdings-table th {
@@ -116,7 +116,7 @@ st.markdown(
     .holdings-table th:nth-child(7), .holdings-table td:nth-child(7) { width: 100px; }
     .holdings-table th:nth-child(8), .holdings-table td:nth-child(8) { width: 100px; }
     .holdings-table td:last-child, .holdings-table th:last-child {
-        width: 400px;
+        width: 600px;
         white-space: normal;
         overflow: visible;
         text-overflow: clip;
