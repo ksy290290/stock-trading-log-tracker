@@ -66,7 +66,7 @@ st.markdown(
         font-size: 0.88rem;
     }
     .jnl-table th {
-        color: var(--text-dim) !important;
+        color: var(--text) !important;
         font-weight: 700 !important;
         text-align: left;
         padding: 10px 12px;
@@ -131,8 +131,8 @@ st.markdown(
         align-items: center;
         gap: 6px;
         font-size: 0.78rem;
-        color: var(--text-dim);
-        font-weight: 500;
+        color: var(--text);
+        font-weight: 700;
         margin-bottom: 8px;
     }
     .metric-card .metric-label::before {
@@ -154,7 +154,7 @@ st.markdown(
         padding-top: 8px;
         border-top: 1px solid var(--border);
         font-size: 0.76rem;
-        color: var(--text-dim);
+        color: #4B5563;
     }
     .metric-card .metric-sub div {
         margin-bottom: 3px;
@@ -428,7 +428,7 @@ def colorize_pnl(text, value):
     if value is None or value == 0:
         return escaped
     color = "#F04452" if value > 0 else "#3182F6"
-    return f'<span style="color:{color};">{escaped}</span>'
+    return f'<span style="color:{color};font-weight:700;">{escaped}</span>'
 
 
 def metric_card(label, value, color, sublines=None):
@@ -656,15 +656,15 @@ with tab_dashboard:
 
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            metric_card("투자금액 (원금)", f"{principal:,.0f}", "#E8F0FE")
+            metric_card("투자금액 (원금)", f"{principal:,.0f}", "#3182F6")
         with c2:
-            metric_card("평가 손익 (미실현)", f"{unrealized:,.0f}", "#FFF4E0")
+            metric_card("평가 손익 (미실현)", f"{unrealized:,.0f}", "#F59E0B")
         with c3:
-            metric_card("실현 손익", f"{realized:,.0f}", "#E6F4EA")
+            metric_card("실현 손익", f"{realized:,.0f}", "#16A34A")
         with c4:
-            metric_card("누적 배당금", f"{total_dividends:,.0f}", "#FCE8E6")
+            metric_card("누적 배당금", f"{total_dividends:,.0f}", "#F04452")
         with c5:
-            metric_card("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-", "#F3E8FD")
+            metric_card("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-", "#8B5CF6")
 
         st.subheader("보유 종목")
         holding_notes = db.get_holding_notes()
@@ -957,14 +957,14 @@ with tab_calendar:
     mcol1, mcol2, mcol3, mcol4 = st.columns(4)
     with mcol1:
         buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
-        metric_card("매수", buy_val, "#E8F0FE", sublines=buy_ticker_lines)
+        metric_card("매수", buy_val, "#3182F6", sublines=buy_ticker_lines)
     with mcol2:
         sell_val = fmt(month_sell_krw) + (f" (${month_sell_usd:,.0f})" if month_sell_usd else "")
-        metric_card("매도", sell_val, "#FCE8E6", sublines=sell_ticker_lines)
+        metric_card("매도", sell_val, "#F04452", sublines=sell_ticker_lines)
     with mcol3:
-        metric_card("판매 수익", sell_pnl_val, "#F3E8FD", sublines=sell_pnl_lines)
+        metric_card("판매 수익", sell_pnl_val, "#8B5CF6", sublines=sell_pnl_lines)
     with mcol4:
-        metric_card("배당금", fmt(month_div_krw), "#E6F4EA", sublines=div_ticker_lines)
+        metric_card("배당금", fmt(month_div_krw), "#16A34A", sublines=div_ticker_lines)
 
     st.caption(
         "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
