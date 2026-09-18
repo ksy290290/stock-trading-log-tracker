@@ -286,6 +286,9 @@ st.markdown(
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             max-width: 100%;
+            /* 기본값(pan-x pan-y)은 두 손가락 제스처를 스크롤로만 먹어서 브라우저
+               자체 핀치줌이 안 먹힘 - pinch-zoom을 같이 허용해서 확대/축소도 되게 함 */
+            touch-action: pan-x pinch-zoom;
         }
     }
     .tm-sector-header {
