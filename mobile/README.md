@@ -27,13 +27,20 @@ Streamlit 앱과 이 iOS 앱은 **같은 매매 기록(같은 Turso DB)** 을 �
 
 ### 옵션 A: Render.com (무료 티어, 추천)
 
-1. Render 대시보드에서 "New Web Service" → 이 GitHub 레포 연결
-2. Build Command: `pip install -r requirements-api.txt`
-3. Start Command: `uvicorn api_server:app --host 0.0.0.0 --port $PORT`
-4. Environment Variables:
-   - `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` (Streamlit 앱에서 쓰던 것과 동일하게)
-   - `API_KEY` (아무 임의의 문자열 - 앱과 서버가 이 값으로 인증. 설정하지 않으면 인증 없이 열림)
-5. 배포되면 `https://xxxx.onrender.com` 같은 주소가 생김 - 이걸 앱 설정 탭에 입력
+레포 루트에 `render.yaml`(Blueprint)을 만들어뒀습니다. Render 대시보드에서 계정 생성 후
+"New" → "Blueprint" → 이 GitHub 레포 선택하면 위 서비스 설정(빌드/시작 명령)이 자동으로
+채워집니다. 이 단계는 Render 계정이 필요해서 대신 해드릴 수 없고, 직접 로그인해서
+진행하셔야 합니다.
+
+1. https://dashboard.render.com → "New" → "Blueprint" → `ksy290290/stock-trading-log-tracker` 선택
+2. 환경변수 입력 (자동으로 입력창이 뜸):
+   - `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` (Streamlit 앱에서 쓰던 것과 동일하게 - Turso
+     대시보드 또는 `.streamlit/secrets.toml`에서 확인 가능)
+   - `API_KEY` (아무 임의의 문자열 - 앱과 서버가 이 값으로 인증. 비워두면 인증 없이 열림)
+3. 배포되면 `https://xxxx.onrender.com` 같은 주소가 생김 - 이걸 앱 설정 탭에 입력
+
+Blueprint 없이 수동으로 하고 싶다면 "New Web Service"로 직접 만들고 Build/Start
+Command만 `render.yaml`에 적힌 값을 그대로 입력해도 됩니다.
 
 무료 티어는 일정 시간 요청이 없으면 서버가 잠들어서, 앱에서 첫 요청이 몇 초 느릴 수
 있습니다. 불편하면 유료 플랜이나 Fly.io 등으로 바꿀 수 있습니다.
