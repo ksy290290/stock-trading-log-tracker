@@ -20,11 +20,35 @@ db.init_db()
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+    :root {
+        --canvas: #EEF1F5;
+        --app-bg: #F7F9FC;
+        --surface: #FFFFFF;
+        --surface-2: #F1F4F8;
+        --text: #191F28;
+        --text-dim: #8B95A1;
+        --text-faint: #B0B8C1;
+        --border: #EDF0F4;
+        --accent: #3182F6;
+        --accent-soft: #EAF2FE;
+        --up: #F04452;
+        --up-soft: #FDEDEE;
+        --down: #3182F6;
+        --down-soft: #EAF2FE;
+        --shadow: 0 1px 2px rgba(25,31,40,0.04), 0 8px 20px rgba(25,31,40,0.05);
+    }
+    .stApp {
+        background: var(--app-bg);
+        font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-variant-numeric: tabular-nums;
+    }
     div[role="tablist"] {
         position: sticky;
         top: 60px;
         z-index: 999;
-        background-color: #ffffff;
+        background-color: var(--app-bg);
     }
     @media (prefers-color-scheme: dark) {
         div[role="tablist"] {
@@ -32,28 +56,34 @@ st.markdown(
         }
     }
     h1, h2, h3 {
-        color: #000000 !important;
-        font-weight: 700 !important;
+        color: var(--text) !important;
+        font-weight: 900 !important;
+        letter-spacing: -0.01em;
     }
     .jnl-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.9rem;
+        font-size: 0.88rem;
     }
     .jnl-table th {
-        color: #000000 !important;
+        color: var(--text-dim) !important;
         font-weight: 700 !important;
         text-align: left;
-        padding: 6px 10px;
-        border-bottom: 2px solid #cccccc;
-        background-color: #f7f7f7;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background-color: var(--surface);
         position: sticky;
         top: 0;
+        font-size: 0.78rem;
     }
     .jnl-table td {
-        padding: 5px 10px;
-        border-bottom: 1px solid #eeeeee;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
         white-space: nowrap;
+        color: var(--text);
+    }
+    .jnl-table tr:hover td {
+        background-color: var(--surface-2);
     }
     .jnl-table-scroll {
         max-height: 480px;
@@ -61,6 +91,10 @@ st.markdown(
     }
     .jnl-table-wrap {
         overflow-x: auto;
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        padding: 4px 6px;
     }
     /* 국내/해외 표가 서로 같은 컬럼 순서를 쓰므로, 폭을 완전히 고정해(table-layout:fixed)
        내용 길이와 무관하게 두 표의 가로 크기가 항상 똑같게 함 */
@@ -69,7 +103,7 @@ st.markdown(
         table-layout: fixed;
     }
     .holdings-table td, .holdings-table th {
-        padding: 3px 8px !important;
+        padding: 8px 8px !important;
         overflow: hidden;
         text-overflow: ellipsis;
     }
@@ -85,27 +119,45 @@ st.markdown(
         width: 240px;
     }
     .metric-card {
-        border-radius: 14px;
-        padding: 14px 16px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+        padding: 16px 18px;
         margin-bottom: 6px;
     }
     .metric-card .metric-label {
-        font-size: 0.8rem;
-        color: #444444;
-        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.78rem;
+        color: var(--text-dim);
+        font-weight: 500;
+        margin-bottom: 8px;
+    }
+    .metric-card .metric-label::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--dot-color, var(--accent));
+        flex: 0 0 auto;
     }
     .metric-card .metric-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #000000;
+        font-size: 1.4rem;
+        font-weight: 900;
+        color: var(--text);
+        letter-spacing: -0.01em;
     }
     .metric-card .metric-sub {
-        margin-top: 6px;
-        font-size: 0.78rem;
-        color: #333333;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+        font-size: 0.76rem;
+        color: var(--text-dim);
     }
     .metric-card .metric-sub div {
-        margin-bottom: 2px;
+        margin-bottom: 3px;
     }
     .cal-grid {
         width: 100%;
@@ -113,16 +165,18 @@ st.markdown(
         table-layout: fixed;
     }
     .cal-grid th {
-        background-color: #f7f7f7;
-        color: #000000 !important;
+        background-color: var(--surface);
+        color: var(--text-dim) !important;
         font-weight: 700 !important;
-        padding: 6px;
-        border: 1px solid #ddd;
+        padding: 8px;
+        border: 1px solid var(--border);
         text-align: center;
+        font-size: 0.76rem;
     }
     .cal-grid td {
         vertical-align: top;
-        border: 1px solid #eee;
+        border: 1px solid var(--border);
+        background-color: var(--surface);
         height: 112px;
         padding: 4px;
         font-size: 0.72rem;
@@ -133,25 +187,26 @@ st.markdown(
         cursor: pointer;
     }
     .cal-grid td.cal-dim {
-        background-color: #fafafa;
-        color: #bbbbbb;
+        background-color: var(--surface-2);
+        color: var(--text-faint);
     }
     .cal-daynum {
         font-weight: 700;
+        color: var(--text);
         margin-bottom: 2px;
     }
     .cal-tot-buy {
-        color: #2f6fd6;
+        color: var(--accent);
         font-size: 0.64rem;
         font-weight: 700;
     }
     .cal-tot-sell {
-        color: #d6462f;
+        color: var(--up);
         font-size: 0.64rem;
         font-weight: 700;
     }
     .cal-tot-div {
-        color: #1f9d55;
+        color: #16A34A;
         font-size: 0.64rem;
         font-weight: 700;
     }
@@ -160,7 +215,7 @@ st.markdown(
     }
     .cal-event {
         color: #ffffff;
-        border-radius: 3px;
+        border-radius: 4px;
         padding: 0px 4px;
         margin-bottom: 1px;
         font-size: 0.68rem;
@@ -174,7 +229,7 @@ st.markdown(
     }
     .cal-details summary {
         font-size: 0.68rem;
-        color: #888888;
+        color: var(--text-faint);
         cursor: pointer;
         list-style: none;
     }
@@ -182,7 +237,7 @@ st.markdown(
         display: none;
     }
     .cal-details[open] summary {
-        color: #333333;
+        color: var(--text-dim);
         font-weight: 700;
     }
     .cal-full {
@@ -196,10 +251,10 @@ st.markdown(
         max-width: 320px;
         max-height: 280px;
         overflow-y: auto;
-        background-color: #ffffff;
-        border: 1px solid #ccc;
-        border-radius: 8px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        background-color: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(25,31,40,0.14);
         padding: 8px;
         z-index: 1000;
         cursor: default;
@@ -207,7 +262,7 @@ st.markdown(
     }
     .cal-full-title {
         font-weight: 700;
-        color: #000000;
+        color: var(--text);
         margin-bottom: 4px;
         font-size: 0.75rem;
     }
@@ -216,8 +271,9 @@ st.markdown(
     }
     .tm-canvas {
         position: relative;
-        background: #fafafa;
-        border-radius: 6px;
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
         /* overflow를 auto/hidden으로 두면 CSS 스펙상 overflow-x/y가 서로 묶여서
            타일 hover 툴팁(position:absolute, 타일 바깥으로 튀어나옴)이 잘림 ->
            캘린더 팝업 때와 동일한 문제라 일부러 overflow를 지정하지 않음(기본 visible). */
@@ -225,14 +281,14 @@ st.markdown(
     .tm-sector-header {
         position: absolute;
         box-sizing: border-box;
-        background: #eef0f3;
-        color: #333333;
+        background: var(--surface-2);
+        color: var(--text-dim);
         font-weight: 700;
         font-size: 0.68rem;
         display: flex;
         align-items: center;
         padding-left: 6px;
-        border-radius: 3px 3px 0 0;
+        border-radius: 8px 8px 0 0;
         overflow: hidden;
         white-space: nowrap;
     }
@@ -261,27 +317,27 @@ st.markdown(
         left: 50%;
         transform: translateX(-50%);
         margin-bottom: 5px;
-        background: #1e1e1e;
+        background: var(--text);
         color: #ffffff;
         padding: 4px 9px;
-        border-radius: 5px;
+        border-radius: 8px;
         font-size: 0.72rem;
         font-weight: 600;
         white-space: nowrap;
         z-index: 2000;
         pointer-events: none;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        box-shadow: 0 2px 8px rgba(25,31,40,0.25);
     }
     .tm-tile:hover .tm-tooltip {
         display: block;
     }
     .tm-tile:hover .tm-tile-box {
-        outline: 2px solid rgba(0,0,0,0.55);
+        outline: 2px solid rgba(25,31,40,0.55);
         outline-offset: -2px;
     }
     .tm-logo {
         margin-bottom: 2px;
-        border-radius: 4px;
+        border-radius: 6px;
         /* 배경색을 두지 않음: 로고 로드에 실패해도(예: 로고 CDN 접속 차단) 빈 흰 사각형이
            아니라 그냥 아무것도 안 보이게 하기 위함 */
         background-size: contain;
@@ -371,16 +427,18 @@ def colorize_pnl(text, value):
     escaped = html.escape(text)
     if value is None or value == 0:
         return escaped
-    color = "#d32f2f" if value > 0 else "#1565c0"
+    color = "#F04452" if value > 0 else "#3182F6"
     return f'<span style="color:{color};">{escaped}</span>'
 
 
 def metric_card(label, value, color, sublines=None):
+    """color는 이제 카드 배경이 아니라 라벨 앞 작은 포인트(닷) 색상으로만 씀
+    (토스 스타일: 카드는 흰 배경 통일, 색은 포인트로만 절제해서 사용)."""
     sub_html = ""
     if sublines:
         sub_html = '<div class="metric-sub">' + "".join(f"<div>{html.escape(s)}</div>" for s in sublines) + "</div>"
     st.markdown(
-        f'<div class="metric-card" style="background-color:{color};">'
+        f'<div class="metric-card" style="--dot-color:{color};">'
         f'<div class="metric-label">{html.escape(label)}</div>'
         f'<div class="metric-value">{html.escape(value)}</div>'
         f"{sub_html}"
@@ -463,14 +521,15 @@ def get_heatmap_caps(cache_key: str, tickers: tuple):
 
 
 def _heatmap_color(pct):
+    """상승은 빨강, 하락은 파랑 (국내 증권 관례 - 대시보드/캘린더와 동일한 색 규칙)."""
     if pct is None:
         return "#e0e0e0", "#888"
     pct = max(-4.0, min(4.0, pct))
     if pct >= 0:
         alpha = 0.15 + (pct / 4.0) * 0.85
-        return f"rgba(30,150,80,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#1a5c33"
+        return f"rgba(240,68,82,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#B23140"
     alpha = 0.15 + (abs(pct) / 4.0) * 0.85
-    return f"rgba(210,50,50,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#8a1f1f"
+    return f"rgba(49,130,246,{alpha:.2f})", "#ffffff" if alpha > 0.45 else "#1F5FC4"
 
 
 def render_treemap(title, items):
@@ -727,7 +786,7 @@ with tab_calendar:
             day_totals[t["trade_date"]][f"{side_key}_usd"] += amount_krw / t["fx_rate"]
     for (cdate, cticker, cside), g in trade_groups.items():
         label = "매수" if cside == "BUY" else "매도"
-        color = "#3D9DF3" if cside == "BUY" else "#FF6C6C"
+        color = "#3182F6" if cside == "BUY" else "#F04452"
         events_by_date[cdate].append((f"{label} {g['name']} {fmt_qty(g['qty'])}", color, g["amount"]))
 
     # 배당 (같은 날짜/티커 합산)
@@ -737,7 +796,7 @@ with tab_calendar:
         div_groups[key]["amount"] += d["amount"]
         div_groups[key]["name"] = d["name"] or d["ticker"]
     for (cdate, cticker), g in div_groups.items():
-        events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#3DD56D", g["amount"]))
+        events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#16A34A", g["amount"]))
         day_totals[cdate]["div_krw"] += g["amount"]
 
     # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
@@ -758,7 +817,7 @@ with tab_calendar:
                     edate = future.result()
                     if edate:
                         ename = cal_positions[eticker]["name"] or eticker
-                        events_by_date[edate].append((f"실적발표 {ename}", "#B073FF", 0.0))
+                        events_by_date[edate].append((f"실적발표 {ename}", "#8B5CF6", 0.0))
 
     if "cal_year" not in st.session_state:
         _today = dt.date.today()
