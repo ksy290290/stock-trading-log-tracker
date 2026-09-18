@@ -63,6 +63,13 @@ python import_from_screenshot.py dividend --market US --ticker AAPL \
 OCR이 아니라 Claude가 직접 화면을 읽는 방식이라 정확도는 높지만, 매번 Claude에게
 요청해야 동작합니다 (완전 자동 백그라운드 처리는 아님).
 
+## iOS 앱 (네이티브)
+
+`mobile/` 폴더에 React Native(Expo) 기반 iOS 앱이 있습니다. 같은 매매 기록(Turso DB)을
+공유하는 REST API(`api_server.py`)를 통해 동작하며, 매매일지 추가/수정/삭제와 성과분석을
+아이폰 네이티브 앱으로 쓸 수 있습니다. Mac 없이 Windows에서 개발/빌드하는 방법을 포함한
+자세한 안내는 [`mobile/README.md`](mobile/README.md) 참고.
+
 ## 한계 / 알려진 제약
 
 - 평단가 계산은 **이동평균법**이며, FIFO 세무 기준과는 다를 수 있습니다.
