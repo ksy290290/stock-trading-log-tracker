@@ -67,32 +67,46 @@ QR 코드가 뜨면 아이폰에 **Expo Go** 앱(App Store에서 무료 설치)�
 2. **매매일지** 탭에서 우측 하단 `+` 버튼으로 매매 기록 추가/수정/삭제
 3. **성과분석** 탭에서 보유 종목별 평가손익, 총 실현손익, 승률 확인
 
-## 3. 진짜 앱 아이콘으로 설치하기 (App Store 없이)
+## 3. 내 아이폰에 진짜 앱으로 설치하기 (EAS Build, 나 혼자 쓰는 용도)
 
-Expo Go 없이 이 앱만 따로 설치하고 싶다면 "개발 빌드"를 만들면 됩니다 (Apple Developer
-계정 없이도 가능, 7일마다 재설치 필요 - 무료 Apple ID 기준). 필요하면 알려주시면
-EAS Build 설정을 추가해드릴게요.
+**정정**: 이전에 "무료 Apple ID로도 개발 빌드 설치 가능"이라고 안내했는데, 그건 Mac +
+Xcode로 USB 연결해서 로컬 설치할 때만 해당되는 얘기였습니다. Mac이 없어서 EAS의
+클라우드 빌드 서비스로 실제 아이폰에 설치 가능한 `.ipa`를 만들려면, App Store에 올리지
+않고 **나 혼자 쓰는 용도라 해도 Apple Developer Program(연 $99, https://developer.apple.com/programs/)
+가입이 필요**합니다. 실제 기기용 프로비저닝 프로파일 발급 자체가 유료 계정 기능이라
+이 부분은 우회할 방법이 없습니다 (Expo Go 안에서만 쓴다면 계속 무료입니다).
 
-## 4. App Store에 정식 제출하기
-
-전제 조건: **Apple Developer Program 가입** (연 $99, https://developer.apple.com/programs/).
-Mac 없이도 아래 과정은 전부 Windows에서 가능합니다 - 실제 컴파일은 Expo의 클라우드
-macOS가 대신 해줍니다.
+`eas.json`은 이미 만들어뒀습니다 (`development`/`preview`/`production` 3가지 빌드
+프로필). 나 혼자 매일 쓰는 용도로는 개발 서버 연결이 필요 없는 **`preview` 프로필**을
+추천합니다 (`development`은 코딩하면서 실시간으로 갱신해보는 용도라 PC에서 `npx expo start`가
+켜져 있어야 합니다).
 
 ```bash
 npm install -g eas-cli
-eas login                     # Expo 계정 (무료 가입)
-eas build:configure           # 최초 1회, eas.json 생성
-eas build --platform ios      # 클라우드에서 .ipa 빌드 (Apple Developer 계정 로그인 필요)
-eas submit --platform ios     # 빌드된 .ipa를 App Store Connect에 제출
+eas login                             # Expo 계정 (무료 가입)
+eas device:create                     # 내 아이폰을 EAS에 등록 (링크가 뜨면 아이폰 사파리에서 열기)
+eas build --platform ios --profile preview
 ```
 
-첫 `eas build`를 실행하면 Apple 인증서/프로비저닝 프로파일을 EAS가 자동으로
-만들어줄지 물어봅니다 (권장: 예). 이후 App Store Connect에서 스크린샷, 앱 설명 등을
-채우고 심사 제출하면 됩니다.
+처음 실행하면 Apple 계정 로그인과 인증서/프로비저닝 프로파일 자동 생성 여부를 물어봅니다
+(권장: 예). 빌드가 끝나면 QR 코드/링크가 뜨는데, 아이폰 사파리로 열어서 설치하면
+홈 화면에 진짜 앱 아이콘으로 들어갑니다. 프로비저닝 프로파일은 보통 1년 유효합니다.
 
 진행하기 전에 `app.json`의 `ios.bundleIdentifier`(현재 `com.example.stocktradingjournal`)를
-본인 소유의 고유한 값으로 바꿔야 합니다 (예: `com.<본인영문이름>.stocktradingjournal`).
+본인 소유의 고유한 값으로 바꾸는 걸 권장합니다 (예: `com.<본인영문이름>.stocktradingjournal`).
+
+## 4. App Store에 정식 제출하기 (나중에, 필요해지면)
+
+위 3번 단계와 똑같은 Apple Developer Program 계정을 그대로 씁니다. 프로필만
+`production`으로 바꿔서 빌드하고 제출하면 됩니다.
+
+```bash
+eas build --platform ios --profile production
+eas submit --platform ios --profile production
+```
+
+빌드가 끝나면 App Store Connect(https://appstoreconnect.apple.com)에서 스크린샷,
+앱 설명 등을 채우고 심사 제출하면 됩니다.
 
 ## 참고: 왜 이 구조인가
 
