@@ -369,6 +369,62 @@ st.markdown(
     .tm-pct {
         font-weight: 700;
     }
+
+    /* 폰 화면(가로 640px 이하): 데스크톱 밀도로 짜인 표/카드가 그대로 축소되면서
+       가독성이 떨어지는 문제를 완화. 특히 holdings-table은 국내/해외 표 폭을
+       맞추려고 1440px로 고정해뒀던 값이라 폰에서는 그냥 옆으로 전부 밀려나가는
+       원인이었음 - 폰에서는 그 고정폭을 풀고 글자를 키우는 쪽으로 전환. */
+    @media (max-width: 640px) {
+        .jnl-table {
+            font-size: 0.98rem;
+        }
+        .jnl-table th {
+            font-size: 0.82rem;
+            padding: 10px 10px;
+        }
+        .jnl-table td {
+            padding: 11px 10px;
+        }
+        .holdings-table {
+            width: max-content !important;
+            min-width: 100%;
+        }
+        .holdings-table th, .holdings-table td {
+            padding: 10px 12px !important;
+        }
+        .holdings-table td:last-child, .holdings-table th:last-child {
+            width: 220px;
+        }
+        .metric-card {
+            padding: 14px 16px;
+        }
+        .metric-card .metric-value {
+            font-size: 1.55rem;
+        }
+        .metric-card .metric-label {
+            font-size: 0.82rem;
+        }
+        .cal-grid th {
+            font-size: 0.82rem;
+            padding: 6px 4px;
+        }
+        .cal-grid td {
+            height: 92px;
+            font-size: 0.78rem;
+            padding: 5px;
+        }
+        .cal-tot-buy, .cal-tot-sell, .cal-tot-div {
+            font-size: 0.7rem;
+        }
+        .cal-event {
+            font-size: 0.72rem;
+            padding: 1px 5px;
+        }
+        button[data-baseweb="tab"] {
+            font-size: 0.86rem !important;
+            padding: 10px 12px !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
