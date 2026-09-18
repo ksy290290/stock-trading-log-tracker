@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
 stock_journal.db
+stock_journal.db.backup-*
 .venv/
 venv/
 *.pdf
 *.xlsx
+이미지예시/
+.streamlit/secrets.toml
