@@ -14,7 +14,7 @@ from analytics import chronological_key, compute_positions, total_realized_pnl, 
 import treemap
 from heatmap_data import KOSPI_STOCKS, SP500_STOCKS
 
-st.set_page_config(page_title="주식 매매일지", page_icon="📈", layout="wide")
+st.set_page_config(page_title="주식 매매일지", page_icon="assets/app_icon.png", layout="wide")
 db.init_db()
 
 st.markdown(
