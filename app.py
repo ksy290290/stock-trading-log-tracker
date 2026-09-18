@@ -424,6 +424,22 @@ st.markdown(
             font-size: 0.86rem !important;
             padding: 10px 12px !important;
         }
+        /* 캘린더 이전달/제목/다음달 행은 st.columns가 폰 폭에서 기본적으로
+           세로로 쌓아버려서(◀이전달, 제목, 다음달▶ 순으로 3줄) 망가지는 걸
+           막기 위해 한 줄 유지 + 버튼을 작게 축소 */
+        .st-key-cal_nav_row div[data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important;
+            gap: 6px !important;
+            align-items: center !important;
+        }
+        .st-key-cal_nav_row div[data-testid="stColumn"] {
+            min-width: 0 !important;
+        }
+        .st-key-cal_nav_row button {
+            font-size: 0.72rem !important;
+            padding: 6px 8px !important;
+            white-space: nowrap;
+        }
     }
     </style>
     """,
@@ -893,24 +909,25 @@ with tab_calendar:
         st.session_state.cal_year = _today.year
         st.session_state.cal_month = _today.month
 
-    col_prev, col_title, col_next = st.columns([1, 4, 1])
-    if col_prev.button("◀ 이전달"):
-        m, y = st.session_state.cal_month - 1, st.session_state.cal_year
-        if m < 1:
-            m, y = 12, y - 1
-        st.session_state.cal_month, st.session_state.cal_year = m, y
-        st.rerun()
-    col_title.markdown(
-        f'<div style="text-align:center; font-size:1.5rem; font-weight:700; '
-        f'color:#000000; padding-top:6px;">{st.session_state.cal_year}년 {st.session_state.cal_month}월</div>',
-        unsafe_allow_html=True,
-    )
-    if col_next.button("다음달 ▶"):
-        m, y = st.session_state.cal_month + 1, st.session_state.cal_year
-        if m > 12:
-            m, y = 1, y + 1
-        st.session_state.cal_month, st.session_state.cal_year = m, y
-        st.rerun()
+    with st.container(key="cal_nav_row"):
+        col_prev, col_title, col_next = st.columns([1, 4, 1])
+        if col_prev.button("◀", help="이전달"):
+            m, y = st.session_state.cal_month - 1, st.session_state.cal_year
+            if m < 1:
+                m, y = 12, y - 1
+            st.session_state.cal_month, st.session_state.cal_year = m, y
+            st.rerun()
+        col_title.markdown(
+            f'<div style="text-align:center; font-size:1.5rem; font-weight:700; '
+            f'color:#000000; padding-top:6px;">{st.session_state.cal_year}년 {st.session_state.cal_month}월</div>',
+            unsafe_allow_html=True,
+        )
+        if col_next.button("▶", help="다음달"):
+            m, y = st.session_state.cal_month + 1, st.session_state.cal_year
+            if m > 12:
+                m, y = 1, y + 1
+            st.session_state.cal_month, st.session_state.cal_year = m, y
+            st.rerun()
 
     _cal = calendar_module.Calendar(firstweekday=6)  # 일요일 시작
     _weeks = _cal.monthdatescalendar(st.session_state.cal_year, st.session_state.cal_month)
@@ -1465,35 +1482,81 @@ with tab_perf:
     if not trades:
         st.info("매매 기록이 없어 분석할 내용이 없습니다.")
     else:
-        positions = compute_positions(trades)
-        dividends_by_ticker = defaultdict(float)
-        for d in db.get_dividends():
-            dividends_by_ticker[d["ticker"]] += d["amount"]
+        all_dividends = db.get_dividends()
+        month_options = sorted(
+            {t["trade_date"][:7] for t in trades} | {d["pay_date"][:7] for d in all_dividends},
+            reverse=True,
+        )
+
+        period = st.radio("기간", ["전체", "월별"], horizontal=True, key="perf_period")
+        selected_month = st.selectbox("월 선택", month_options, key="perf_month") if period == "월별" else None
+        title_suffix = f" ({selected_month})" if selected_month else ""
+
+        positions = compute_positions(trades)  # 평단가는 항상 전체 매매 이력 기준으로 계산 (월별 필터와 무관)
 
         rows = []
-        for ticker, pos in positions.items():
-            realized = pos["realized_pnl"]
-            price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
-            unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
-            dividend = dividends_by_ticker.get(ticker, 0.0)
-            total = realized + unrealized + dividend
-            rows.append(
-                {
-                    "_sort": total,
-                    "종목": pos["name"] or ticker,
-                    "티커": ticker,
-                    "실현손익": fmt(round(realized, 0)),
-                    "평가손익": fmt(round(unrealized, 0)),
-                    "배당금": fmt(round(dividend, 0)),
-                    "합계": fmt(round(total, 0)),
-                    "매도횟수": len(pos["sell_records"]),
-                }
-            )
-        df = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
-        st.subheader("종목별 손익 (배당금 포함)")
-        render_table(df, scroll=True)
+        if period == "전체":
+            dividends_by_ticker = defaultdict(float)
+            for d in all_dividends:
+                dividends_by_ticker[d["ticker"]] += d["amount"]
+            for ticker, pos in positions.items():
+                realized = pos["realized_pnl"]
+                price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
+                unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
+                dividend = dividends_by_ticker.get(ticker, 0.0)
+                total = realized + unrealized + dividend
+                rows.append(
+                    {
+                        "_sort": total,
+                        "종목": pos["name"] or ticker,
+                        "티커": ticker,
+                        "실현손익": fmt(round(realized, 0)),
+                        "평가손익": fmt(round(unrealized, 0)),
+                        "배당금": fmt(round(dividend, 0)),
+                        "합계": fmt(round(total, 0)),
+                        "매도횟수": len(pos["sell_records"]),
+                    }
+                )
+        else:
+            # 월별 뷰: 평가손익은 "그 달의 실적"이라는 개념이 없어(항상 현재 시점 스냅샷) 제외하고,
+            # 그 달에 실제로 발생한 실현손익/배당만 집계. 평단가(원가)는 위에서 이미 전체 이력으로 계산해둔
+            # positions를 그대로 참조하므로, 이전 달 매수분을 이번 달에 판 경우도 원가가 정확함.
+            realized_by_ticker = defaultdict(float)
+            sell_count_by_ticker = defaultdict(int)
+            for ticker, pos in positions.items():
+                for s in pos["sell_records"]:
+                    if s["date"].startswith(selected_month):
+                        realized_by_ticker[ticker] += s["pnl"]
+                        sell_count_by_ticker[ticker] += 1
+            dividends_by_ticker = defaultdict(float)
+            for d in all_dividends:
+                if d["pay_date"].startswith(selected_month):
+                    dividends_by_ticker[d["ticker"]] += d["amount"]
+            for ticker in sorted(set(realized_by_ticker) | set(dividends_by_ticker)):
+                pos = positions.get(ticker, {})
+                realized = realized_by_ticker.get(ticker, 0.0)
+                dividend = dividends_by_ticker.get(ticker, 0.0)
+                total = realized + dividend
+                rows.append(
+                    {
+                        "_sort": total,
+                        "종목": pos.get("name") or ticker,
+                        "티커": ticker,
+                        "실현손익": fmt(round(realized, 0)),
+                        "배당금": fmt(round(dividend, 0)),
+                        "합계": fmt(round(total, 0)),
+                        "매도횟수": sell_count_by_ticker.get(ticker, 0),
+                    }
+                )
 
-        st.subheader("누적 실현손익 추이")
+        st.subheader(f"종목별 손익{title_suffix}" + (" (배당금 포함)" if period == "전체" else ""))
+        if not rows:
+            st.caption("해당 월에 실현손익/배당 기록이 없습니다.")
+        else:
+            df = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
+            render_table(df, scroll=True)
+
+        st.subheader(f"누적 실현손익 추이{title_suffix}")
         chrono = sorted(trades, key=chronological_key)
         cum_data = []
         running_positions = {}
@@ -1509,9 +1572,12 @@ with tab_perf:
                 p["avg_cost"] = total_cost / p["qty"] if p["qty"] else 0.0
             else:
                 pnl = (t["price"] - p["avg_cost"]) * t["quantity"] - (t["fee"] or 0) - (t["tax"] or 0)
-                cum += pnl
                 p["qty"] -= t["quantity"]
-                cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})
+                # 월별 뷰에서는 선택한 달의 매도만 누적해서, "이번 달 실현손익이 어떻게 쌓였는지"를 보여줌
+                # (전체 이력 누적값이 아니라 그 달 시작을 0으로 보는 누적)
+                if period == "전체" or t["trade_date"].startswith(selected_month):
+                    cum += pnl
+                    cum_data.append({"날짜": t["trade_date"], "누적실현손익": cum})
         if cum_data:
             chart_df = pd.DataFrame(cum_data)
             chart = (
@@ -1529,7 +1595,12 @@ with tab_perf:
             )
             st.altair_chart(chart, use_container_width=True)
         else:
-            st.caption("매도 기록이 없어 실현손익 추이를 표시할 수 없습니다.")
+            no_sell_msg = (
+                "매도 기록이 없어 실현손익 추이를 표시할 수 없습니다."
+                if period == "전체"
+                else "해당 월에 매도 기록이 없어 실현손익 추이를 표시할 수 없습니다."
+            )
+            st.caption(no_sell_msg)
 
 # ---------------------------------------------------------------------------
 # AI 인사이트 (Claude가 조사해서 저장한 뉴스/공시/리서치)
