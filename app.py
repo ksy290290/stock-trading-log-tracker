@@ -50,11 +50,6 @@ st.markdown(
         z-index: 999;
         background-color: var(--app-bg);
     }
-    @media (prefers-color-scheme: dark) {
-        div[role="tablist"] {
-            background-color: #0e1117;
-        }
-    }
     h1, h2, h3 {
         color: var(--text) !important;
         font-weight: 900 !important;
