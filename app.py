@@ -754,7 +754,11 @@ def mobile_add_trade_dialog():
     name = st.text_input("종목명", value=suggest_name(ticker, market_code), key="madd_name")
     c1, c2 = st.columns(2)
     qty = c1.number_input("수량", min_value=0.0, step=1.0, key="madd_qty")
-    price = c2.number_input("가격", min_value=0.0, step=1.0, key="madd_price")
+    price = c2.number_input("가격 (1주당)", min_value=0.0, step=1.0, key="madd_price")
+    total_amount = st.number_input(
+        "또는 총 매수금액 (선택 - 가격 대신 이 값을 넣으면 수량으로 나눠서 가격을 자동 계산)",
+        min_value=0.0, step=1.0, key="madd_total_amount",
+    )
     c3, c4 = st.columns(2)
     fee = c3.number_input("수수료", min_value=0.0, step=1.0, key="madd_fee")
     tax = c4.number_input("세금", min_value=0.0, step=1.0, key="madd_tax")
@@ -767,8 +771,10 @@ def mobile_add_trade_dialog():
 
     col_submit, col_cancel = st.columns(2)
     if col_submit.button("추가", type="primary", use_container_width=True, key="madd_submit"):
+        if price <= 0 and qty > 0 and total_amount > 0:
+            price = total_amount / qty
         if not ticker.strip() or qty <= 0 or price <= 0:
-            st.warning("종목 코드, 수량, 가격을 확인해주세요.")
+            st.warning("종목 코드, 수량, 가격(또는 총 매수금액)을 확인해주세요.")
         else:
             db.add_trade(
                 ticker.strip(), name.strip() or None, market_code,
@@ -1570,7 +1576,11 @@ with tab_trades:
         col4, col5, col6 = st.columns(3)
         side = col4.selectbox("구분", ["BUY", "SELL"], format_func=lambda s: "매수" if s == "BUY" else "매도")
         quantity = col5.number_input("수량", min_value=0.0, step=1.0)
-        price = col6.number_input(f"체결가 ({currency})", min_value=0.0, step=1.0)
+        price = col6.number_input(f"체결가 ({currency}, 1주당)", min_value=0.0, step=1.0)
+        total_amount = st.number_input(
+            f"또는 총 매수금액 ({currency}, 선택 - 체결가 대신 이 값을 넣으면 수량으로 나눠서 체결가를 자동 계산)",
+            min_value=0.0, step=1.0, value=0.0,
+        )
 
         col7, col8 = st.columns(2)
         fee = col7.number_input(f"수수료 ({currency})", min_value=0.0, step=0.1, value=0.0)
@@ -1581,8 +1591,10 @@ with tab_trades:
         thesis = st.text_area("매매 사유/근거")
         submitted = st.form_submit_button("기록 추가")
         if submitted:
+            if price <= 0 and quantity > 0 and total_amount > 0:
+                price = total_amount / quantity
             if not ticker or quantity <= 0 or price <= 0:
-                st.error("티커, 수량, 체결가는 필수입니다.")
+                st.error("티커, 수량, 체결가(또는 총 매수금액)는 필수입니다.")
             else:
                 fx_rate = None
                 price_krw, fee_krw, tax_krw = price, fee, tax
