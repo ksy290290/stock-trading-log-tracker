@@ -10,7 +10,14 @@ import streamlit as st
 
 import db
 import price_data
-from analytics import chronological_key, compute_positions, total_realized_pnl, total_unrealized_pnl, win_rate
+from analytics import (
+    chronological_key,
+    compute_holding_episodes,
+    compute_positions,
+    total_realized_pnl,
+    total_unrealized_pnl,
+    win_rate,
+)
 import treemap
 from heatmap_data import KOSPI_STOCKS, SP500_STOCKS
 
@@ -1082,8 +1089,12 @@ if _detect_mobile():
     st.stop()
 
 
-tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf, tab_ai = st.tabs(
-    ["🔥 히트맵", "📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석", "🤖 AI 인사이트"]
+(
+    tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf,
+    tab_holding, tab_ai,
+) = st.tabs(
+    ["🔥 히트맵", "📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석",
+     "⏳ 보유기간", "🤖 AI 인사이트"]
 )
 
 
@@ -2038,6 +2049,124 @@ with tab_perf:
                 else "해당 월에 매도 기록이 없어 실현손익 추이를 표시할 수 없습니다."
             )
             st.caption(no_sell_msg)
+
+# ---------------------------------------------------------------------------
+# 보유기간 (종목별 첫 매수~매도/현재까지, 장투/스윙/단타 파악용)
+# ---------------------------------------------------------------------------
+HOLDING_SHORT_DAYS = 30   # 이 미만이면 단타
+HOLDING_LONG_DAYS = 180   # 이 이상이면 장투 (그 사이는 스윙)
+HOLDING_COLORS = {"단타": "#F59E0B", "스윙": "#3182F6", "장투": "#16A34A"}
+
+
+def classify_holding_days(days):
+    if days < HOLDING_SHORT_DAYS:
+        return "단타"
+    if days < HOLDING_LONG_DAYS:
+        return "스윙"
+    return "장투"
+
+
+with tab_holding:
+    st.subheader("보유기간 분석")
+    st.caption(
+        f"종목별로 첫 매수일부터 완전히 청산한 날(또는 아직 보유 중이면 오늘)까지의 기간을 보여줍니다. "
+        f"{HOLDING_SHORT_DAYS}일 미만은 단타, {HOLDING_SHORT_DAYS}~{HOLDING_LONG_DAYS}일은 스윙, "
+        f"{HOLDING_LONG_DAYS}일 이상은 장투로 분류했어요. 한 종목을 완전히 팔았다가 나중에 다시 산 경우는 "
+        "별개의 보유 구간으로 따로 표시됩니다."
+    )
+
+    holding_trades = db.get_trades()
+    if not holding_trades:
+        st.info("매매 기록이 없습니다.")
+    else:
+        episodes = compute_holding_episodes(holding_trades, dt.date.today().isoformat())
+        if not episodes:
+            st.info("보유 구간을 계산할 매매 기록이 없습니다.")
+        else:
+            for ep in episodes:
+                start = dt.date.fromisoformat(ep["start_date"])
+                end = dt.date.fromisoformat(ep["end_date"])
+                ep["days"] = max((end - start).days, 0)
+                ep["classification"] = classify_holding_days(ep["days"])
+
+            episodes.sort(key=lambda e: e["start_date"])
+
+            total_days = sum(e["days"] for e in episodes)
+            avg_days = total_days / len(episodes)
+            n_short = sum(1 for e in episodes if e["classification"] == "단타")
+            n_swing = sum(1 for e in episodes if e["classification"] == "스윙")
+            n_long = sum(1 for e in episodes if e["classification"] == "장투")
+            n = len(episodes)
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                metric_card("평균 보유일수", f"{avg_days:,.0f}일", "#3182F6")
+            with c2:
+                metric_card("단타", f"{n_short}건 ({n_short / n:.0%})", HOLDING_COLORS["단타"])
+            with c3:
+                metric_card("스윙", f"{n_swing}건 ({n_swing / n:.0%})", HOLDING_COLORS["스윙"])
+            with c4:
+                metric_card("장투", f"{n_long}건 ({n_long / n:.0%})", HOLDING_COLORS["장투"])
+
+            chart_rows = []
+            for ep in episodes:
+                label = f"{ep['name'] or ep['ticker']} ({ep['ticker']})"
+                if sum(1 for e in episodes if e["ticker"] == ep["ticker"]) > 1:
+                    label += f" · {ep['start_date']}"
+                chart_rows.append(
+                    {
+                        "종목": label,
+                        "시작": ep["start_date"],
+                        "종료": ep["end_date"],
+                        "분류": ep["classification"],
+                        "보유일수": ep["days"],
+                        "상태": "보유중" if ep["is_open"] else "청산완료",
+                    }
+                )
+            chart_df = pd.DataFrame(chart_rows)
+
+            gantt = (
+                alt.Chart(chart_df)
+                .mark_bar(height=14)
+                .encode(
+                    x=alt.X("시작:T", title=None),
+                    x2=alt.X2("종료:T"),
+                    y=alt.Y("종목:N", sort=list(chart_df.sort_values("시작")["종목"]), title=None),
+                    color=alt.Color(
+                        "분류:N",
+                        scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
+                        legend=alt.Legend(title="분류"),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("종목:N", title="종목"),
+                        alt.Tooltip("시작:T", title="시작일"),
+                        alt.Tooltip("종료:T", title="종료일"),
+                        alt.Tooltip("보유일수:Q", title="보유일수"),
+                        alt.Tooltip("분류:N", title="분류"),
+                        alt.Tooltip("상태:N", title="상태"),
+                    ],
+                )
+                .properties(height=max(24 * len(chart_df), 200))
+                .interactive()
+            )
+            st.altair_chart(gantt, use_container_width=True)
+
+            st.subheader("전체 보유 구간")
+            table_df = pd.DataFrame(
+                [
+                    {
+                        "종목명": ep["name"] or ep["ticker"],
+                        "티커": ep["ticker"],
+                        "시장": market_label(ep["market"]),
+                        "시작일": ep["start_date"],
+                        "종료일": "보유중" if ep["is_open"] else ep["end_date"],
+                        "보유일수": ep["days"],
+                        "분류": ep["classification"],
+                    }
+                    for ep in sorted(episodes, key=lambda e: e["days"], reverse=True)
+                ]
+            )
+            render_table(table_df, scroll=True)
 
 # ---------------------------------------------------------------------------
 # AI 인사이트 (Claude가 조사해서 저장한 뉴스/공시/리서치)

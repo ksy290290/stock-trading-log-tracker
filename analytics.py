@@ -95,3 +95,57 @@ def total_unrealized_pnl(positions, price_lookup):
             continue
         total += (price - pos["avg_cost"]) * pos["qty"]
     return total
+
+
+def compute_holding_episodes(trades, today_iso):
+    """Groups each ticker's trades into holding episodes: a continuous span
+    from a fresh BUY (starting from zero shares) to full liquidation (or,
+    if still held, to `today_iso`). A ticker that was fully sold and later
+    bought again gets two separate episodes instead of one span that
+    would silently include the gap where nothing was held.
+
+    Returns a list of {ticker, name, market, start_date, end_date, is_open}.
+    """
+    by_ticker = defaultdict(list)
+    for t in _sorted_trades(trades):
+        by_ticker[t["ticker"]].append(t)
+
+    episodes = []
+    for ticker, tlist in by_ticker.items():
+        qty = 0.0
+        start_date = None
+        name = tlist[0]["name"]
+        market = tlist[0]["market"]
+        for t in tlist:
+            name = t["name"] or name
+            if t["side"] == "BUY":
+                if qty <= 1e-9:
+                    start_date = t["trade_date"]
+                qty += t["quantity"]
+            else:  # SELL
+                qty -= t["quantity"]
+                if qty <= 1e-9 and start_date is not None:
+                    episodes.append(
+                        {
+                            "ticker": ticker,
+                            "name": name,
+                            "market": market,
+                            "start_date": start_date,
+                            "end_date": t["trade_date"],
+                            "is_open": False,
+                        }
+                    )
+                    qty = 0.0
+                    start_date = None
+        if qty > 1e-9 and start_date is not None:
+            episodes.append(
+                {
+                    "ticker": ticker,
+                    "name": name,
+                    "market": market,
+                    "start_date": start_date,
+                    "end_date": today_iso,
+                    "is_open": True,
+                }
+            )
+    return episodes
