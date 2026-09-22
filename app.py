@@ -593,8 +593,21 @@ def compute_perf_rows(trades, all_dividends, period, selected_month):
             dividends_by_ticker[d["ticker"]] += d["amount"]
         for ticker, pos in positions.items():
             realized = pos["realized_pnl"]
-            price = price_in_krw(ticker, pos["market"]) if pos["qty"] > 0 else None
-            unrealized = (price - pos["avg_cost"]) * pos["qty"] if price is not None and pos["qty"] > 0 else 0
+            unrealized = 0
+            if pos["qty"] > 0:
+                if pos["market"] == "US" and pos.get("avg_cost_usd"):
+                    # 해외 종목은 매수 시점 환율로 저장된 avg_cost(KRW)를 지금 환율로 환산된
+                    # 현재가와 바로 비교하면 "그때 환율 vs 지금 환율" 차이가 주식 자체 수익률에
+                    # 섞여버림(대시보드에서 이미 겪은 문제와 동일) - USD 기준으로 먼저 손익을
+                    # 계산한 뒤 지금 환율 하나만 곱해서 원화 환산 (대시보드와 같은 방식으로 통일).
+                    usd_price = cached_price(ticker, "US")
+                    fx = cached_usdkrw()
+                    if usd_price is not None and fx is not None:
+                        unrealized = (usd_price - pos["avg_cost_usd"]) * pos["qty"] * fx
+                else:
+                    price = price_in_krw(ticker, pos["market"])
+                    if price is not None:
+                        unrealized = (price - pos["avg_cost"]) * pos["qty"]
             dividend = dividends_by_ticker.get(ticker, 0.0)
             total = realized + unrealized + dividend
             rows.append(
