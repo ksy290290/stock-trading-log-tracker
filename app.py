@@ -2076,14 +2076,25 @@ with tab_holding:
         f"종목별로 첫 매수일부터 완전히 청산한 날(또는 아직 보유 중이면 오늘)까지의 기간을 보여줍니다. "
         f"{HOLDING_SHORT_DAYS}일 미만은 단타, {HOLDING_SHORT_DAYS}~{HOLDING_LONG_DAYS}일은 스윙, "
         f"{HOLDING_LONG_DAYS}일 이상은 장투로 분류했어요. 한 종목을 완전히 팔았다가 나중에 다시 산 경우는 "
-        "별개의 보유 구간으로 따로 표시됩니다."
+        "별개의 보유 구간으로 따로 표시됩니다. 수익률은 청산된 구간은 실제 매도 현금흐름 기준(환율 포함), "
+        "보유중인 구간은 환율 변동을 뺀 주식 자체 평가수익률 기준이에요. 연환산 수익률은 보유기간이 다른 "
+        "구간끼리도 공정하게 비교할 수 있게 1년 기준으로 환산한 값인데, 며칠 안 되는 초단타는 값이 "
+        "과장되게 커질 수 있으니 참고만 하세요."
     )
 
     holding_trades = db.get_trades()
     if not holding_trades:
         st.info("매매 기록이 없습니다.")
     else:
-        episodes = compute_holding_episodes(holding_trades, dt.date.today().isoformat())
+        holding_positions = compute_positions(holding_trades)
+        holding_price_lookup = {
+            ticker: cached_price(ticker, pos["market"]) for ticker, pos in holding_positions.items()
+        }
+        holding_fx_rate = cached_usdkrw()
+        episodes = compute_holding_episodes(
+            holding_trades, dt.date.today().isoformat(),
+            price_lookup=holding_price_lookup, fx_rate=holding_fx_rate,
+        )
         if not episodes:
             st.info("보유 구간을 계산할 매매 기록이 없습니다.")
         else:
@@ -2092,6 +2103,10 @@ with tab_holding:
                 end = dt.date.fromisoformat(ep["end_date"])
                 ep["days"] = max((end - start).days, 0)
                 ep["classification"] = classify_holding_days(ep["days"])
+                if ep["return_pct"] is not None and ep["days"] > 0:
+                    ep["annualized_pct"] = (1 + ep["return_pct"]) ** (365 / ep["days"]) - 1
+                else:
+                    ep["annualized_pct"] = None
 
             episodes.sort(key=lambda e: e["start_date"])
 
@@ -2151,9 +2166,51 @@ with tab_holding:
                     ],
                 )
                 .properties(height=max(24 * len(chart_df), 200))
-                .interactive()
             )
             st.altair_chart(gantt, use_container_width=True)
+
+            st.subheader("기간 대비 수익률")
+            scatter_rows = [
+                {
+                    "종목": f"{ep['name'] or ep['ticker']} ({ep['ticker']})",
+                    "보유일수": ep["days"],
+                    "수익률": ep["return_pct"] * 100,
+                    "연환산수익률": ep["annualized_pct"] * 100 if ep["annualized_pct"] is not None else None,
+                    "분류": ep["classification"],
+                    "상태": "보유중" if ep["is_open"] else "청산완료",
+                }
+                for ep in episodes
+                if ep["return_pct"] is not None
+            ]
+            if not scatter_rows:
+                st.caption("수익률을 계산할 수 있는 보유 구간이 없습니다.")
+            else:
+                scatter_df = pd.DataFrame(scatter_rows)
+                scatter = (
+                    alt.Chart(scatter_df)
+                    .mark_circle(size=90, opacity=0.75)
+                    .encode(
+                        x=alt.X("보유일수:Q", title="보유일수"),
+                        y=alt.Y("수익률:Q", title="수익률 (%)", axis=alt.Axis(format=".1f")),
+                        color=alt.Color(
+                            "분류:N",
+                            scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
+                            legend=alt.Legend(title="분류"),
+                        ),
+                        shape=alt.Shape("상태:N", legend=alt.Legend(title="상태")),
+                        tooltip=[
+                            alt.Tooltip("종목:N", title="종목"),
+                            alt.Tooltip("보유일수:Q", title="보유일수"),
+                            alt.Tooltip("수익률:Q", title="수익률(%)", format="+.1f"),
+                            alt.Tooltip("연환산수익률:Q", title="연환산(%)", format="+.1f"),
+                            alt.Tooltip("분류:N", title="분류"),
+                            alt.Tooltip("상태:N", title="상태"),
+                        ],
+                    )
+                    .properties(height=420)
+                )
+                zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9CA3AF", strokeDash=[4, 4]).encode(y="y:Q")
+                st.altair_chart(scatter + zero_line, use_container_width=True)
 
             st.subheader("전체 보유 구간")
             table_df = pd.DataFrame(
@@ -2166,6 +2223,8 @@ with tab_holding:
                         "종료일": "보유중" if ep["is_open"] else ep["end_date"],
                         "보유일수": ep["days"],
                         "분류": ep["classification"],
+                        "수익률": f"{ep['return_pct'] * 100:+.1f}%" if ep["return_pct"] is not None else "-",
+                        "연환산수익률": f"{ep['annualized_pct'] * 100:+.1f}%" if ep["annualized_pct"] is not None else "-",
                     }
                     for ep in sorted(episodes, key=lambda e: e["days"], reverse=True)
                 ]

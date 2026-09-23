@@ -110,15 +110,31 @@ def total_unrealized_pnl(positions, price_lookup, fx_rate=None):
     return total
 
 
-def compute_holding_episodes(trades, today_iso):
+def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None):
     """Groups each ticker's trades into holding episodes: a continuous span
     from a fresh BUY (starting from zero shares) to full liquidation (or,
     if still held, to `today_iso`). A ticker that was fully sold and later
     bought again gets two separate episodes instead of one span that
     would silently include the gap where nothing was held.
 
-    Returns a list of {ticker, name, market, start_date, end_date, is_open}.
+    price_lookup (optional): dict ticker -> current price in that ticker's own
+    market currency (KRW for KR, USD for US), same convention as
+    total_unrealized_pnl. If given (with fx_rate for any US ticker), each
+    episode also gets a `return_pct`:
+    - closed episode: real KRW cash flow (buy cost vs sell proceeds, each at
+      its own trade's own fx rate) - matches what actually happened to the
+      won in the account.
+    - open episode on a US ticker: computed in USD (cost vs current value)
+      before converting, so currency movement since purchase isn't mixed
+      into the stock's own return - same convention as the dashboard/
+      compute_perf_rows. KR tickers have no such split since there's no FX.
+    Without price_lookup, `return_pct` is omitted from open episodes only
+    (closed episodes never need a live price, so they always get it).
+
+    Returns a list of {ticker, name, market, start_date, end_date, is_open,
+    return_pct}.
     """
+    price_lookup = price_lookup or {}
     by_ticker = defaultdict(list)
     for t in _sorted_trades(trades):
         by_ticker[t["ticker"]].append(t)
@@ -127,6 +143,9 @@ def compute_holding_episodes(trades, today_iso):
     for ticker, tlist in by_ticker.items():
         qty = 0.0
         start_date = None
+        cost_krw = 0.0
+        cost_usd = 0.0
+        proceeds_krw = 0.0
         name = tlist[0]["name"]
         market = tlist[0]["market"]
         for t in tlist:
@@ -134,8 +153,15 @@ def compute_holding_episodes(trades, today_iso):
             if t["side"] == "BUY":
                 if qty <= 1e-9:
                     start_date = t["trade_date"]
+                    cost_krw = 0.0
+                    cost_usd = 0.0
+                    proceeds_krw = 0.0
+                cost_krw += t["quantity"] * t["price"] + (t["fee"] or 0)
+                if market == "US" and t["fx_rate"]:
+                    cost_usd += t["quantity"] * (t["price"] / t["fx_rate"]) + (t["fee"] or 0) / t["fx_rate"]
                 qty += t["quantity"]
             else:  # SELL
+                proceeds_krw += t["quantity"] * t["price"] - (t["fee"] or 0) - (t["tax"] or 0)
                 qty -= t["quantity"]
                 if qty <= 1e-9 and start_date is not None:
                     episodes.append(
@@ -146,11 +172,20 @@ def compute_holding_episodes(trades, today_iso):
                             "start_date": start_date,
                             "end_date": t["trade_date"],
                             "is_open": False,
+                            "return_pct": (proceeds_krw - cost_krw) / cost_krw if cost_krw else None,
                         }
                     )
                     qty = 0.0
                     start_date = None
         if qty > 1e-9 and start_date is not None:
+            return_pct = None
+            price = price_lookup.get(ticker)
+            if price is not None:
+                if market == "US":
+                    if cost_usd and fx_rate:
+                        return_pct = (qty * price - cost_usd) / cost_usd
+                elif cost_krw:
+                    return_pct = (qty * price - cost_krw) / cost_krw
             episodes.append(
                 {
                     "ticker": ticker,
@@ -159,6 +194,7 @@ def compute_holding_episodes(trades, today_iso):
                     "start_date": start_date,
                     "end_date": today_iso,
                     "is_open": True,
+                    "return_pct": return_pct,
                 }
             )
     return episodes
