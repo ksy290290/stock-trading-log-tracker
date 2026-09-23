@@ -84,8 +84,16 @@ def total_realized_pnl(positions):
     return sum(pos["realized_pnl"] for pos in positions.values())
 
 
-def total_unrealized_pnl(positions, price_lookup):
-    """price_lookup: dict ticker -> current_price (or None)"""
+def total_unrealized_pnl(positions, price_lookup, fx_rate=None):
+    """price_lookup: dict ticker -> current price in the position's OWN market
+    currency (KRW for KR tickers, USD for US tickers - NOT pre-converted to
+    KRW). For US positions this is compared against avg_cost_usd, not the
+    KRW-denominated avg_cost, so currency movement since purchase isn't mixed
+    into the stock's own return; the USD result is converted to KRW with a
+    single current fx_rate at the end. Same convention as the dashboard's
+    per-holding table and app.py's compute_perf_rows. US positions are
+    skipped if fx_rate isn't provided.
+    """
     total = 0.0
     for ticker, pos in positions.items():
         if pos["qty"] <= 0:
@@ -93,7 +101,12 @@ def total_unrealized_pnl(positions, price_lookup):
         price = price_lookup.get(ticker)
         if price is None:
             continue
-        total += (price - pos["avg_cost"]) * pos["qty"]
+        if pos["market"] == "US" and pos.get("avg_cost_usd"):
+            if not fx_rate:
+                continue
+            total += (price - pos["avg_cost_usd"]) * pos["qty"] * fx_rate
+        else:
+            total += (price - pos["avg_cost"]) * pos["qty"]
     return total
 
 

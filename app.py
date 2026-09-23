@@ -1237,13 +1237,17 @@ with tab_dashboard:
         st.info("아직 매매 기록이 없습니다. '매매일지' 탭에서 첫 거래를 입력해보세요.")
     else:
         positions = compute_positions(trades)
+        # 종목 자체 통화 기준 가격(국내는 원화, 해외는 달러) - 미실현손익 합계에서
+        # 해외 종목을 오늘 환율로 환산한 값을 매수시점 환율 기준 평단가와 바로 빼면
+        # 환차 변동이 섞여버리므로(위 compute_perf_rows와 동일한 문제), total_unrealized_pnl이
+        # 내부적으로 avg_cost_usd + 환율을 따로 적용하도록 통화 그대로 넘긴다.
         price_lookup = {
-            ticker: price_in_krw(ticker, pos["market"])
+            ticker: cached_price(ticker, pos["market"])
             for ticker, pos in positions.items()
             if pos["qty"] > 0
         }
         realized = total_realized_pnl(positions)
-        unrealized = total_unrealized_pnl(positions, price_lookup)
+        unrealized = total_unrealized_pnl(positions, price_lookup, fx_rate=cached_usdkrw())
         wr = win_rate(positions)
         total_dividends = sum(d["amount"] for d in db.get_dividends())
         principal = sum(

@@ -115,6 +115,14 @@ def remove_trade(trade_id: int, _: None = Depends(require_api_key)):
 
 
 def _positions_with_prices():
+    """price_lookup 값은 해당 종목의 원래 통화 그대로다(국내는 원화, 해외는
+    달러 - price_data.get_current_price가 환산하지 않은 원가를 반환함). 해외
+    종목의 평단가(avg_cost)도 매수 시점 환율로 저장돼 있어서, 오늘 가격을
+    오늘 환율로 KRW 환산한 뒤 평단가와 바로 빼면 매수~오늘 사이의 환율 변동이
+    주식 자체 손익에 섞여버린다 - 이 파일 안에서 그렇게 계산하지 말고
+    analytics.total_unrealized_pnl(fx_rate=...)와 아래 avg_cost_usd 기반 계산을
+    통해서만 미실현손익을 구할 것.
+    """
     trades = [_row_to_dict(r) for r in db.get_trades()]
     positions = analytics.compute_positions(trades)
     price_lookup = {
@@ -122,26 +130,35 @@ def _positions_with_prices():
         for ticker, pos in positions.items()
         if pos["qty"] > 0
     }
-    return positions, price_lookup
+    fx_rate = price_data.get_usdkrw_rate()
+    return positions, price_lookup, fx_rate
 
 
 @app.get("/analytics/positions")
 def get_positions(_: None = Depends(require_api_key)):
-    positions, price_lookup = _positions_with_prices()
+    positions, price_lookup, fx_rate = _positions_with_prices()
     result = []
     for ticker, pos in positions.items():
         current_price = price_lookup.get(ticker)
         unrealized = None
         if pos["qty"] > 0 and current_price is not None:
-            unrealized = (current_price - pos["avg_cost"]) * pos["qty"]
+            if pos["market"] == "US" and pos.get("avg_cost_usd"):
+                if fx_rate:
+                    unrealized = (current_price - pos["avg_cost_usd"]) * pos["qty"] * fx_rate
+            else:
+                unrealized = (current_price - pos["avg_cost"]) * pos["qty"]
         result.append(
             {
                 "ticker": ticker,
                 "name": pos["name"],
                 "market": pos["market"],
                 "qty": pos["qty"],
+                # avg_cost/current_price는 항상 원화. 해외 종목은 avg_cost_usd/
+                # current_price_usd로 달러 기준 값도 같이 줌 (환율 섞임 없이 보려면 이쪽 사용).
                 "avg_cost": pos["avg_cost"],
-                "current_price": current_price,
+                "avg_cost_usd": pos.get("avg_cost_usd") if pos["market"] == "US" else None,
+                "current_price": current_price * fx_rate if pos["market"] == "US" and fx_rate and current_price else current_price,
+                "current_price_usd": current_price if pos["market"] == "US" else None,
                 "realized_pnl": pos["realized_pnl"],
                 "unrealized_pnl": unrealized,
             }
@@ -151,10 +168,10 @@ def get_positions(_: None = Depends(require_api_key)):
 
 @app.get("/analytics/summary")
 def get_summary(_: None = Depends(require_api_key)):
-    positions, price_lookup = _positions_with_prices()
+    positions, price_lookup, fx_rate = _positions_with_prices()
     return {
         "win_rate": analytics.win_rate(positions),
         "total_realized_pnl": analytics.total_realized_pnl(positions),
-        "total_unrealized_pnl": analytics.total_unrealized_pnl(positions, price_lookup),
+        "total_unrealized_pnl": analytics.total_unrealized_pnl(positions, price_lookup, fx_rate=fx_rate),
         "trade_count": len(db.get_trades()),
     }
