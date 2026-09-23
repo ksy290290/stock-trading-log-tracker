@@ -132,7 +132,10 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
     (closed episodes never need a live price, so they always get it).
 
     Returns a list of {ticker, name, market, start_date, end_date, is_open,
-    return_pct}.
+    return_pct, pnl_krw}. pnl_krw is the same figure in absolute won (same
+    fx handling as return_pct), for when the money amount matters more than
+    the percentage - a huge % gain on a tiny position is a rounding error
+    next to a small % gain on a large one.
     """
     price_lookup = price_lookup or {}
     by_ticker = defaultdict(list)
@@ -173,19 +176,23 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
                             "end_date": t["trade_date"],
                             "is_open": False,
                             "return_pct": (proceeds_krw - cost_krw) / cost_krw if cost_krw else None,
+                            "pnl_krw": proceeds_krw - cost_krw,
                         }
                     )
                     qty = 0.0
                     start_date = None
         if qty > 1e-9 and start_date is not None:
             return_pct = None
+            pnl_krw = None
             price = price_lookup.get(ticker)
             if price is not None:
                 if market == "US":
                     if cost_usd and fx_rate:
                         return_pct = (qty * price - cost_usd) / cost_usd
+                        pnl_krw = (qty * price - cost_usd) * fx_rate
                 elif cost_krw:
                     return_pct = (qty * price - cost_krw) / cost_krw
+                    pnl_krw = qty * price - cost_krw
             episodes.append(
                 {
                     "ticker": ticker,
@@ -195,6 +202,7 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
                     "end_date": today_iso,
                     "is_open": True,
                     "return_pct": return_pct,
+                    "pnl_krw": pnl_krw,
                 }
             )
     return episodes

@@ -2070,6 +2070,23 @@ def classify_holding_days(days):
     return "장투"
 
 
+# 차트/필터 전용 세부 구간(위 단타/스윙/장투 3분류는 상단 요약 카드에서만 씀) -
+# 1년 미만은 1개월 단위로, 1년 이상은 1년 단위로 쪼개서 필터링할 수 있게 함
+# (긴 장투 종목 때문에 날짜축이 늘어나 짧은 구간이 안 보이는 문제 완화용).
+FINE_BUCKET_ORDER = [f"{m}~{m + 1}개월" for m in range(12)] + ["1~2년", "2~3년", "3년+"]
+FINE_BUCKET_COLORS_SCHEME = "turbo"  # 버킷 개수가 많아서(15개) 수동 색상 대신 연속 스펙트럼 스킴 사용
+
+
+def classify_holding_fine(days):
+    if days < 365:
+        m = min(days // 30, 11)
+        return f"{m}~{m + 1}개월"
+    years = days // 365
+    if years >= 3:
+        return "3년+"
+    return f"{years}~{years + 1}년"
+
+
 with tab_holding:
     st.subheader("보유기간 분석")
     st.caption(
@@ -2103,6 +2120,7 @@ with tab_holding:
                 end = dt.date.fromisoformat(ep["end_date"])
                 ep["days"] = max((end - start).days, 0)
                 ep["classification"] = classify_holding_days(ep["days"])
+                ep["fine_classification"] = classify_holding_fine(ep["days"])
                 if ep["return_pct"] is not None and ep["days"] > 0:
                     ep["annualized_pct"] = (1 + ep["return_pct"]) ** (365 / ep["days"]) - 1
                 else:
@@ -2128,11 +2146,14 @@ with tab_holding:
                 metric_card("장투", f"{n_long}건 ({n_long / n:.0%})", HOLDING_COLORS["장투"])
 
             class_filter = st.multiselect(
-                "표시할 분류 (타임라인·산점도에만 적용, 위 요약/아래 표는 항상 전체 기준)",
-                options=["단타", "스윙", "장투"],
-                default=["단타", "스윙", "장투"],
+                "표시할 보유기간 구간 (1년 미만은 1개월 단위, 이상은 1년 단위 - 타임라인·아래 그래프들에만 "
+                "적용, 위 요약/맨 아래 표는 항상 전체 기준)",
+                options=FINE_BUCKET_ORDER,
+                default=FINE_BUCKET_ORDER,
             )
-            visible_episodes = [e for e in episodes if e["classification"] in class_filter] if class_filter else episodes
+            visible_episodes = (
+                [e for e in episodes if e["fine_classification"] in class_filter] if class_filter else episodes
+            )
 
             # 같은 종목을 팔았다가 다시 산 경우도 한 줄(같은 종목명)에 막대가 끊어졌다
             # 다시 생기는 형태로 보이도록 종목명에 날짜를 붙이지 않는다 (Altair는 같은
@@ -2142,14 +2163,14 @@ with tab_holding:
                     "종목": f"{ep['name'] or ep['ticker']} ({ep['ticker']})",
                     "시작": ep["start_date"],
                     "종료": ep["end_date"],
-                    "분류": ep["classification"],
+                    "기간대": ep["fine_classification"],
                     "보유일수": ep["days"],
                     "상태": "보유중" if ep["is_open"] else "청산완료",
                 }
                 for ep in visible_episodes
             ]
             if not chart_rows:
-                st.caption("선택한 분류에 해당하는 보유 구간이 없습니다.")
+                st.caption("선택한 구간에 해당하는 보유 구간이 없습니다.")
             else:
                 chart_df = pd.DataFrame(chart_rows)
                 ticker_order = chart_df.groupby("종목")["시작"].min().sort_values().index.tolist()
@@ -2162,16 +2183,16 @@ with tab_holding:
                         x2=alt.X2("종료:T"),
                         y=alt.Y("종목:N", sort=ticker_order, title=None),
                         color=alt.Color(
-                            "분류:N",
-                            scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
-                            legend=alt.Legend(title="분류"),
+                            "기간대:N",
+                            scale=alt.Scale(domain=FINE_BUCKET_ORDER, scheme=FINE_BUCKET_COLORS_SCHEME),
+                            legend=alt.Legend(title="보유기간"),
                         ),
                         tooltip=[
                             alt.Tooltip("종목:N", title="종목"),
                             alt.Tooltip("시작:T", title="시작일"),
                             alt.Tooltip("종료:T", title="종료일"),
                             alt.Tooltip("보유일수:Q", title="보유일수"),
-                            alt.Tooltip("분류:N", title="분류"),
+                            alt.Tooltip("기간대:N", title="보유기간"),
                             alt.Tooltip("상태:N", title="상태"),
                         ],
                     )
@@ -2186,14 +2207,14 @@ with tab_holding:
                     "보유일수": ep["days"],
                     "수익률": ep["return_pct"] * 100,
                     "연환산수익률": ep["annualized_pct"] * 100 if ep["annualized_pct"] is not None else None,
-                    "분류": ep["classification"],
+                    "기간대": ep["fine_classification"],
                     "상태": "보유중" if ep["is_open"] else "청산완료",
                 }
                 for ep in visible_episodes
                 if ep["return_pct"] is not None
             ]
             if not scatter_rows:
-                st.caption("선택한 분류 중 수익률을 계산할 수 있는 보유 구간이 없습니다.")
+                st.caption("선택한 구간 중 수익률을 계산할 수 있는 보유 구간이 없습니다.")
             else:
                 scatter_df = pd.DataFrame(scatter_rows)
                 scatter = (
@@ -2203,9 +2224,9 @@ with tab_holding:
                         x=alt.X("보유일수:Q", title="보유일수"),
                         y=alt.Y("수익률:Q", title="수익률 (%)", axis=alt.Axis(format=".1f")),
                         color=alt.Color(
-                            "분류:N",
-                            scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
-                            legend=alt.Legend(title="분류"),
+                            "기간대:N",
+                            scale=alt.Scale(domain=FINE_BUCKET_ORDER, scheme=FINE_BUCKET_COLORS_SCHEME),
+                            legend=alt.Legend(title="보유기간"),
                         ),
                         shape=alt.Shape("상태:N", legend=alt.Legend(title="상태")),
                         tooltip=[
@@ -2213,7 +2234,7 @@ with tab_holding:
                             alt.Tooltip("보유일수:Q", title="보유일수"),
                             alt.Tooltip("수익률:Q", title="수익률(%)", format="+.1f"),
                             alt.Tooltip("연환산수익률:Q", title="연환산(%)", format="+.1f"),
-                            alt.Tooltip("분류:N", title="분류"),
+                            alt.Tooltip("기간대:N", title="보유기간"),
                             alt.Tooltip("상태:N", title="상태"),
                         ],
                     )
@@ -2221,6 +2242,53 @@ with tab_holding:
                 )
                 zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9CA3AF", strokeDash=[4, 4]).encode(y="y:Q")
                 st.altair_chart(scatter + zero_line, use_container_width=True)
+
+            st.subheader("기간 대비 손익금액")
+            st.caption("수익률(%)만으로는 작은 포지션의 큰 % 변동과 큰 포지션의 작은 % 변동을 구분하기 어려워서, "
+                       "실제 원화 손익 크기를 원 크기로 보여줍니다. 빨간 원=이익, 파란 원=손실, 원이 클수록 금액이 큽니다.")
+            money_rows = [
+                {
+                    "종목": f"{ep['name'] or ep['ticker']} ({ep['ticker']})",
+                    "보유일수": ep["days"],
+                    "손익금액": ep["pnl_krw"],
+                    "손익크기": abs(ep["pnl_krw"]),
+                    "구분": "이익" if ep["pnl_krw"] >= 0 else "손실",
+                    "기간대": ep["fine_classification"],
+                    "상태": "보유중" if ep["is_open"] else "청산완료",
+                }
+                for ep in visible_episodes
+                if ep.get("pnl_krw") is not None
+            ]
+            if not money_rows:
+                st.caption("선택한 구간 중 손익금액을 계산할 수 있는 보유 구간이 없습니다.")
+            else:
+                money_df = pd.DataFrame(money_rows)
+                money_chart = (
+                    alt.Chart(money_df)
+                    .mark_circle(opacity=0.7)
+                    .encode(
+                        x=alt.X("보유일수:Q", title="보유일수"),
+                        y=alt.Y("손익금액:Q", title="손익금액 (원)", axis=alt.Axis(format=",.0f")),
+                        size=alt.Size("손익크기:Q", title="손익 크기", scale=alt.Scale(range=[30, 2500]), legend=None),
+                        color=alt.Color(
+                            "구분:N",
+                            scale=alt.Scale(domain=["이익", "손실"], range=["#F04452", "#3182F6"]),
+                            legend=alt.Legend(title="구분"),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("종목:N", title="종목"),
+                            alt.Tooltip("보유일수:Q", title="보유일수"),
+                            alt.Tooltip("손익금액:Q", title="손익금액(원)", format="+,.0f"),
+                            alt.Tooltip("기간대:N", title="보유기간"),
+                            alt.Tooltip("상태:N", title="상태"),
+                        ],
+                    )
+                    .properties(height=420)
+                )
+                money_zero_line = (
+                    alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9CA3AF", strokeDash=[4, 4]).encode(y="y:Q")
+                )
+                st.altair_chart(money_chart + money_zero_line, use_container_width=True)
 
             st.subheader("전체 보유 구간")
             table_df = pd.DataFrame(
@@ -2235,6 +2303,7 @@ with tab_holding:
                         "분류": ep["classification"],
                         "수익률": f"{ep['return_pct'] * 100:+.1f}%" if ep["return_pct"] is not None else "-",
                         "연환산수익률": f"{ep['annualized_pct'] * 100:+.1f}%" if ep["annualized_pct"] is not None else "-",
+                        "손익금액": f"{ep['pnl_krw']:+,.0f}" if ep.get("pnl_krw") is not None else "-",
                     }
                     for ep in sorted(episodes, key=lambda e: e["days"], reverse=True)
                 ]
