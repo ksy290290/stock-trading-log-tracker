@@ -2127,47 +2127,57 @@ with tab_holding:
             with c4:
                 metric_card("장투", f"{n_long}건 ({n_long / n:.0%})", HOLDING_COLORS["장투"])
 
-            chart_rows = []
-            for ep in episodes:
-                label = f"{ep['name'] or ep['ticker']} ({ep['ticker']})"
-                if sum(1 for e in episodes if e["ticker"] == ep["ticker"]) > 1:
-                    label += f" · {ep['start_date']}"
-                chart_rows.append(
-                    {
-                        "종목": label,
-                        "시작": ep["start_date"],
-                        "종료": ep["end_date"],
-                        "분류": ep["classification"],
-                        "보유일수": ep["days"],
-                        "상태": "보유중" if ep["is_open"] else "청산완료",
-                    }
-                )
-            chart_df = pd.DataFrame(chart_rows)
-
-            gantt = (
-                alt.Chart(chart_df)
-                .mark_bar(height=14)
-                .encode(
-                    x=alt.X("시작:T", title=None),
-                    x2=alt.X2("종료:T"),
-                    y=alt.Y("종목:N", sort=list(chart_df.sort_values("시작")["종목"]), title=None),
-                    color=alt.Color(
-                        "분류:N",
-                        scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
-                        legend=alt.Legend(title="분류"),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("종목:N", title="종목"),
-                        alt.Tooltip("시작:T", title="시작일"),
-                        alt.Tooltip("종료:T", title="종료일"),
-                        alt.Tooltip("보유일수:Q", title="보유일수"),
-                        alt.Tooltip("분류:N", title="분류"),
-                        alt.Tooltip("상태:N", title="상태"),
-                    ],
-                )
-                .properties(height=max(24 * len(chart_df), 200))
+            class_filter = st.multiselect(
+                "표시할 분류 (타임라인·산점도에만 적용, 위 요약/아래 표는 항상 전체 기준)",
+                options=["단타", "스윙", "장투"],
+                default=["단타", "스윙", "장투"],
             )
-            st.altair_chart(gantt, use_container_width=True)
+            visible_episodes = [e for e in episodes if e["classification"] in class_filter] if class_filter else episodes
+
+            # 같은 종목을 팔았다가 다시 산 경우도 한 줄(같은 종목명)에 막대가 끊어졌다
+            # 다시 생기는 형태로 보이도록 종목명에 날짜를 붙이지 않는다 (Altair는 같은
+            # y값에 여러 mark_bar 구간이 있으면 알아서 떨어뜨려서 그려줌).
+            chart_rows = [
+                {
+                    "종목": f"{ep['name'] or ep['ticker']} ({ep['ticker']})",
+                    "시작": ep["start_date"],
+                    "종료": ep["end_date"],
+                    "분류": ep["classification"],
+                    "보유일수": ep["days"],
+                    "상태": "보유중" if ep["is_open"] else "청산완료",
+                }
+                for ep in visible_episodes
+            ]
+            if not chart_rows:
+                st.caption("선택한 분류에 해당하는 보유 구간이 없습니다.")
+            else:
+                chart_df = pd.DataFrame(chart_rows)
+                ticker_order = chart_df.groupby("종목")["시작"].min().sort_values().index.tolist()
+
+                gantt = (
+                    alt.Chart(chart_df)
+                    .mark_bar(height=14)
+                    .encode(
+                        x=alt.X("시작:T", title=None),
+                        x2=alt.X2("종료:T"),
+                        y=alt.Y("종목:N", sort=ticker_order, title=None),
+                        color=alt.Color(
+                            "분류:N",
+                            scale=alt.Scale(domain=list(HOLDING_COLORS.keys()), range=list(HOLDING_COLORS.values())),
+                            legend=alt.Legend(title="분류"),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("종목:N", title="종목"),
+                            alt.Tooltip("시작:T", title="시작일"),
+                            alt.Tooltip("종료:T", title="종료일"),
+                            alt.Tooltip("보유일수:Q", title="보유일수"),
+                            alt.Tooltip("분류:N", title="분류"),
+                            alt.Tooltip("상태:N", title="상태"),
+                        ],
+                    )
+                    .properties(height=max(24 * len(chart_df), 200))
+                )
+                st.altair_chart(gantt, use_container_width=True)
 
             st.subheader("기간 대비 수익률")
             scatter_rows = [
@@ -2179,11 +2189,11 @@ with tab_holding:
                     "분류": ep["classification"],
                     "상태": "보유중" if ep["is_open"] else "청산완료",
                 }
-                for ep in episodes
+                for ep in visible_episodes
                 if ep["return_pct"] is not None
             ]
             if not scatter_rows:
-                st.caption("수익률을 계산할 수 있는 보유 구간이 없습니다.")
+                st.caption("선택한 분류 중 수익률을 계산할 수 있는 보유 구간이 없습니다.")
             else:
                 scatter_df = pd.DataFrame(scatter_rows)
                 scatter = (
