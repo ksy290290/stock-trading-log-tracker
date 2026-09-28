@@ -1743,13 +1743,14 @@ with tab_dividends:
 
     with st.form("dividend_form", clear_on_submit=True):
         d_name = st.text_input(
-            "종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(d_ticker, d_market), key="d_name"
+            "종목명 (선택, 보유 중인 티커면 자동완성)", value=suggest_name(d_ticker, d_market)
         )
 
         col4, col5, col6 = st.columns(3)
         d_amount = col4.number_input(f"입금액 (세후 실수령액, {d_currency})", min_value=0.0, step=100.0)
         d_tax = col5.number_input(f"원천징수세액 (선택, {d_currency})", min_value=0.0, step=100.0, value=0.0)
         d_date = col6.date_input("입금일", value=dt.date.today(), key="d_date")
+        d_quantity = st.number_input("입금 시점 보유 수량 (선택)", min_value=0.0, step=1.0, value=0.0)
 
         d_note = st.text_input("메모 (선택)")
         submitted = st.form_submit_button("배당금 추가")
@@ -1772,6 +1773,7 @@ with tab_dividends:
                     tax_krw,
                     d_note.strip() or None,
                     fx_rate,
+                    d_quantity if d_quantity > 0 else None,
                 )
                 st.success("배당금 기록을 추가했습니다.")
                 st.rerun()
@@ -1791,8 +1793,9 @@ with tab_dividends:
 
         display_df["amount"] = display_df.apply(_amount_with_usd, axis=1)
         display_df["tax"] = display_df["tax"].apply(fmt)
+        display_df["quantity"] = display_df["quantity"].apply(lambda q: fmt_qty(q) if q else "-")
         render_table(
-            display_df[["id", "pay_date", "market", "ticker", "name", "amount", "tax", "note"]],
+            display_df[["id", "pay_date", "market", "ticker", "name", "quantity", "amount", "tax", "note"]],
             scroll=True,
         )
         del_div_id = st.number_input("삭제할 배당 기록 ID", min_value=0, step=1, value=0, key="del_div_id")
@@ -1826,6 +1829,10 @@ with tab_dividends:
                         f"원천징수세액 ({ed_currency})", min_value=0.0, value=float(disp_tax), step=100.0
                     )
                     ed_date = ecol3.date_input("입금일", value=dt.date.fromisoformat(d_target["pay_date"]))
+                    ed_quantity = st.number_input(
+                        "입금 시점 보유 수량 (선택)", min_value=0.0, step=1.0,
+                        value=float(d_target["quantity"] or 0),
+                    )
                     ed_note = st.text_input("메모", value=d_target["note"] or "")
                     save_div = st.form_submit_button("수정 저장")
                     if save_div:
@@ -1846,6 +1853,7 @@ with tab_dividends:
                             tax_krw,
                             ed_note.strip() or None,
                             fx_rate,
+                            ed_quantity if ed_quantity > 0 else None,
                         )
                         st.success(f"ID {int(edit_div_id)} 수정 완료")
                         st.rerun()

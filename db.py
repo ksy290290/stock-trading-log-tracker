@@ -196,6 +196,8 @@ def init_db():
     existing_div_cols = {row["name"] for row in cur.execute("PRAGMA table_info(dividends)").fetchall()}
     if "fx_rate" not in existing_div_cols:
         cur.execute("ALTER TABLE dividends ADD COLUMN fx_rate REAL")
+    if "quantity" not in existing_div_cols:
+        cur.execute("ALTER TABLE dividends ADD COLUMN quantity REAL")  # 배당 입금 시점 보유 수량 (선택)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS holding_notes (
@@ -311,24 +313,24 @@ def get_journal(category=None):
     return rows
 
 
-def add_dividend(ticker, name, market, pay_date, amount, tax, note, fx_rate=None):
+def add_dividend(ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None):
     conn = get_conn()
     conn.execute(
-        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, fx_rate, note, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, name, market, pay_date, amount, tax, fx_rate, note, datetime.now().isoformat()),
+        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, datetime.now().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def update_dividend(dividend_id, ticker, name, market, pay_date, amount, tax, note, fx_rate=None):
+def update_dividend(dividend_id, ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None):
     conn = get_conn()
     conn.execute(
         """UPDATE dividends SET ticker = ?, name = ?, market = ?, pay_date = ?, amount = ?,
-                                 tax = ?, fx_rate = ?, note = ?
+                                 tax = ?, fx_rate = ?, note = ?, quantity = ?
            WHERE id = ?""",
-        (ticker, name, market, pay_date, amount, tax, fx_rate, note, dividend_id),
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, dividend_id),
     )
     conn.commit()
     conn.close()
