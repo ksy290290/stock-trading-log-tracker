@@ -808,7 +808,11 @@ def mobile_edit_trade_dialog(trade_id):
     name = st.text_input("종목명", value=t["name"] or "", key="medit_name")
     c1, c2 = st.columns(2)
     qty = c1.number_input("수량", min_value=0.0, value=float(t["quantity"]), step=1.0, key="medit_qty")
-    price = c2.number_input("가격", min_value=0.0, value=float(t["price"]), step=1.0, key="medit_price")
+    price = c2.number_input("가격 (1주당)", min_value=0.0, value=float(t["price"]), step=1.0, key="medit_price")
+    total_amount = st.number_input(
+        "또는 총 매수금액 (선택 - 가격 대신 이 값을 넣으면 수량으로 나눠서 가격을 자동 계산)",
+        min_value=0.0, step=1.0, key="medit_total_amount",
+    )
     c3, c4 = st.columns(2)
     fee = c3.number_input("수수료", min_value=0.0, value=float(t["fee"] or 0), step=1.0, key="medit_fee")
     tax = c4.number_input("세금", min_value=0.0, value=float(t["tax"] or 0), step=1.0, key="medit_tax")
@@ -823,6 +827,8 @@ def mobile_edit_trade_dialog(trade_id):
 
     col_save, col_delete, col_cancel = st.columns(3)
     if col_save.button("저장", type="primary", use_container_width=True, key="medit_save"):
+        if qty > 0 and total_amount > 0:
+            price = total_amount / qty
         db.update_trade(
             trade_id, ticker.strip(), name.strip() or None, "KR" if market == "국내" else "US",
             "BUY" if side == "매수" else "SELL", qty, price, fee, tax,
@@ -1681,7 +1687,11 @@ with tab_trades:
                         format_func=lambda s: "매수" if s == "BUY" else "매도",
                     )
                     e_quantity = ecol2.number_input("수량", min_value=0.0, value=float(target["quantity"]), step=1.0)
-                    e_price = ecol3.number_input(f"체결가 ({e_currency})", min_value=0.0, value=float(disp_price), step=1.0)
+                    e_price = ecol3.number_input(f"체결가 ({e_currency}, 1주당)", min_value=0.0, value=float(disp_price), step=1.0)
+                    e_total_amount = st.number_input(
+                        f"또는 총 매수금액 ({e_currency}, 선택 - 체결가 대신 이 값을 넣으면 수량으로 나눠서 자동 계산)",
+                        min_value=0.0, step=1.0, value=0.0,
+                    )
                     ecol4, ecol5 = st.columns(2)
                     e_fee = ecol4.number_input(f"수수료 ({e_currency})", min_value=0.0, value=float(disp_fee), step=0.1)
                     e_tax = ecol5.number_input(f"거래세 ({e_currency})", min_value=0.0, value=float(disp_tax), step=0.1)
@@ -1690,6 +1700,8 @@ with tab_trades:
                     e_thesis = st.text_area("매매 사유/근거", value=target["thesis"] or "")
                     save_trade = st.form_submit_button("수정 저장")
                     if save_trade:
+                        if e_quantity > 0 and e_total_amount > 0:
+                            e_price = e_total_amount / e_quantity
                         e_market = target["market"]
                         fx_rate = None
                         price_krw, fee_krw, tax_krw = e_price, e_fee, e_tax
