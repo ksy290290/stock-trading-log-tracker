@@ -117,11 +117,10 @@ def remove_trade(trade_id: int, _: None = Depends(require_api_key)):
 def _positions_with_prices():
     """price_lookup 값은 해당 종목의 원래 통화 그대로다(국내는 원화, 해외는
     달러 - price_data.get_current_price가 환산하지 않은 원가를 반환함). 해외
-    종목의 평단가(avg_cost)도 매수 시점 환율로 저장돼 있어서, 오늘 가격을
-    오늘 환율로 KRW 환산한 뒤 평단가와 바로 빼면 매수~오늘 사이의 환율 변동이
-    주식 자체 손익에 섞여버린다 - 이 파일 안에서 그렇게 계산하지 말고
-    analytics.total_unrealized_pnl(fx_rate=...)와 아래 avg_cost_usd 기반 계산을
-    통해서만 미실현손익을 구할 것.
+    종목의 미실현손익은 오늘 환율로 KRW 환산한 현재가를 평단가(avg_cost, 매수
+    시점 환율 기준 원화)와 비교해서 계산 - 매수~오늘 사이의 환율 변동(환차익/
+    환차손)도 실제 원화 손익에 포함시킨다(사용자 결정, app.py 성과분석/
+    대시보드/보유기간 탭과 동일한 기준).
     """
     trades = [_row_to_dict(r) for r in db.get_trades()]
     positions = analytics.compute_positions(trades)
@@ -142,9 +141,9 @@ def get_positions(_: None = Depends(require_api_key)):
         current_price = price_lookup.get(ticker)
         unrealized = None
         if pos["qty"] > 0 and current_price is not None:
-            if pos["market"] == "US" and pos.get("avg_cost_usd"):
+            if pos["market"] == "US":
                 if fx_rate:
-                    unrealized = (current_price - pos["avg_cost_usd"]) * pos["qty"] * fx_rate
+                    unrealized = (current_price * fx_rate - pos["avg_cost"]) * pos["qty"]
             else:
                 unrealized = (current_price - pos["avg_cost"]) * pos["qty"]
         result.append(

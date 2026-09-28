@@ -87,11 +87,12 @@ def total_realized_pnl(positions):
 def total_unrealized_pnl(positions, price_lookup, fx_rate=None):
     """price_lookup: dict ticker -> current price in the position's OWN market
     currency (KRW for KR tickers, USD for US tickers - NOT pre-converted to
-    KRW). For US positions this is compared against avg_cost_usd, not the
-    KRW-denominated avg_cost, so currency movement since purchase isn't mixed
-    into the stock's own return; the USD result is converted to KRW with a
-    single current fx_rate at the end. Same convention as the dashboard's
-    per-holding table and app.py's compute_perf_rows. US positions are
+    KRW). For US positions the price is converted to KRW with the current
+    fx_rate and compared against avg_cost (KRW, blended from each purchase's
+    own historical fx rate) - by user decision this INCLUDES the currency
+    gain/loss since purchase as part of the position's return, on the
+    reasoning that money actually sitting in USD really is worth more or
+    less KRW today depending on where the rate has moved. US positions are
     skipped if fx_rate isn't provided.
     """
     total = 0.0
@@ -101,16 +102,15 @@ def total_unrealized_pnl(positions, price_lookup, fx_rate=None):
         price = price_lookup.get(ticker)
         if price is None:
             continue
-        if pos["market"] == "US" and pos.get("avg_cost_usd"):
+        if pos["market"] == "US":
             if not fx_rate:
                 continue
-            total += (price - pos["avg_cost_usd"]) * pos["qty"] * fx_rate
-        else:
-            total += (price - pos["avg_cost"]) * pos["qty"]
+            price = price * fx_rate
+        total += (price - pos["avg_cost"]) * pos["qty"]
     return total
 
 
-def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None):
+def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None, dividends=None):
     """Groups each ticker's trades into holding episodes: a continuous span
     from a fresh BUY (starting from zero shares) to full liquidation (or,
     if still held, to `today_iso`). A ticker that was fully sold and later
@@ -120,16 +120,22 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
     price_lookup (optional): dict ticker -> current price in that ticker's own
     market currency (KRW for KR, USD for US), same convention as
     total_unrealized_pnl. If given (with fx_rate for any US ticker), each
-    episode also gets a `return_pct`:
-    - closed episode: real KRW cash flow (buy cost vs sell proceeds, each at
-      its own trade's own fx rate) - matches what actually happened to the
-      won in the account.
-    - open episode on a US ticker: computed in USD (cost vs current value)
-      before converting, so currency movement since purchase isn't mixed
-      into the stock's own return - same convention as the dashboard/
-      compute_perf_rows. KR tickers have no such split since there's no FX.
+    episode also gets a `return_pct`, always in KRW terms:
+    - closed episode: real cash flow (buy cost vs sell proceeds, each at its
+      own trade's own fx rate) - matches what actually happened to the won.
+    - open episode: remaining qty x avg_cost (KRW; US prices/costs are
+      converted with fx_rate) vs today's value. By user decision this
+      INCLUDES currency movement since purchase as part of the return -
+      money sitting in USD really is worth more or less KRW today depending
+      on where the rate moved, so it counts.
     Without price_lookup, `return_pct` is omitted from open episodes only
     (closed episodes never need a live price, so they always get it).
+
+    dividends (optional): list of dividend rows (ticker, pay_date, amount -
+    already KRW). Any dividend whose pay_date falls within an episode's
+    [start_date, end_date] is added to that episode's pnl_krw/return_pct -
+    a holding's total return should count income it paid out, not just
+    price movement.
 
     Returns a list of {ticker, name, market, start_date, end_date, is_open,
     return_pct, pnl_krw}. pnl_krw is the same figure in absolute won (same
@@ -138,6 +144,13 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
     next to a small % gain on a large one.
     """
     price_lookup = price_lookup or {}
+    div_by_ticker = defaultdict(list)
+    for d in dividends or []:
+        div_by_ticker[d["ticker"]].append((d["pay_date"], d["amount"] or 0.0))
+
+    def _dividends_in_range(ticker, start_date, end_date):
+        return sum(amt for pay_date, amt in div_by_ticker.get(ticker, []) if start_date <= pay_date <= end_date)
+
     by_ticker = defaultdict(list)
     for t in _sorted_trades(trades):
         by_ticker[t["ticker"]].append(t)
@@ -154,7 +167,6 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
         # 다시 계산해야 함 - 평단가법(avg-cost)에서는 일부 매도가 평단가 자체를
         # 바꾸지 않으므로, compute_positions와 똑같이 평단가를 증분 계산해서 씀.
         avg_cost_krw = 0.0
-        avg_cost_usd = 0.0
         cost_krw_total = 0.0
         proceeds_krw = 0.0
         name = tlist[0]["name"]
@@ -165,24 +177,19 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
                 if qty <= 1e-9:
                     start_date = t["trade_date"]
                     avg_cost_krw = 0.0
-                    avg_cost_usd = 0.0
                     cost_krw_total = 0.0
                     proceeds_krw = 0.0
                 buy_cost_krw = t["quantity"] * t["price"] + (t["fee"] or 0)
                 new_total_cost_krw = qty * avg_cost_krw + buy_cost_krw
                 cost_krw_total += buy_cost_krw
-                new_total_cost_usd = None
-                if market == "US" and t["fx_rate"]:
-                    buy_cost_usd = t["quantity"] * (t["price"] / t["fx_rate"]) + (t["fee"] or 0) / t["fx_rate"]
-                    new_total_cost_usd = qty * avg_cost_usd + buy_cost_usd
                 qty += t["quantity"]
                 avg_cost_krw = new_total_cost_krw / qty
-                if new_total_cost_usd is not None:
-                    avg_cost_usd = new_total_cost_usd / qty
             else:  # SELL
                 proceeds_krw += t["quantity"] * t["price"] - (t["fee"] or 0) - (t["tax"] or 0)
                 qty -= t["quantity"]
                 if qty <= 1e-9 and start_date is not None:
+                    ep_dividends = _dividends_in_range(ticker, start_date, t["trade_date"])
+                    pnl_krw = proceeds_krw - cost_krw_total + ep_dividends
                     episodes.append(
                         {
                             "ticker": ticker,
@@ -191,8 +198,8 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
                             "start_date": start_date,
                             "end_date": t["trade_date"],
                             "is_open": False,
-                            "return_pct": (proceeds_krw - cost_krw_total) / cost_krw_total if cost_krw_total else None,
-                            "pnl_krw": proceeds_krw - cost_krw_total,
+                            "return_pct": pnl_krw / cost_krw_total if cost_krw_total else None,
+                            "pnl_krw": pnl_krw,
                         }
                     )
                     qty = 0.0
@@ -202,13 +209,12 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
             pnl_krw = None
             price = price_lookup.get(ticker)
             if price is not None:
-                if market == "US":
-                    if avg_cost_usd and fx_rate:
-                        return_pct = (price - avg_cost_usd) / avg_cost_usd
-                        pnl_krw = (price - avg_cost_usd) * qty * fx_rate
-                elif avg_cost_krw:
-                    return_pct = (price - avg_cost_krw) / avg_cost_krw
-                    pnl_krw = (price - avg_cost_krw) * qty
+                price_krw = price * fx_rate if market == "US" else price
+                if market != "US" or fx_rate:
+                    cost_basis = avg_cost_krw * qty
+                    ep_dividends = _dividends_in_range(ticker, start_date, today_iso)
+                    pnl_krw = (price_krw - avg_cost_krw) * qty + ep_dividends
+                    return_pct = pnl_krw / cost_basis if cost_basis else None
             episodes.append(
                 {
                     "ticker": ticker,

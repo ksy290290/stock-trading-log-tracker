@@ -602,19 +602,12 @@ def compute_perf_rows(trades, all_dividends, period, selected_month):
             realized = pos["realized_pnl"]
             unrealized = 0
             if pos["qty"] > 0:
-                if pos["market"] == "US" and pos.get("avg_cost_usd"):
-                    # 해외 종목은 매수 시점 환율로 저장된 avg_cost(KRW)를 지금 환율로 환산된
-                    # 현재가와 바로 비교하면 "그때 환율 vs 지금 환율" 차이가 주식 자체 수익률에
-                    # 섞여버림(대시보드에서 이미 겪은 문제와 동일) - USD 기준으로 먼저 손익을
-                    # 계산한 뒤 지금 환율 하나만 곱해서 원화 환산 (대시보드와 같은 방식으로 통일).
-                    usd_price = cached_price(ticker, "US")
-                    fx = cached_usdkrw()
-                    if usd_price is not None and fx is not None:
-                        unrealized = (usd_price - pos["avg_cost_usd"]) * pos["qty"] * fx
-                else:
-                    price = price_in_krw(ticker, pos["market"])
-                    if price is not None:
-                        unrealized = (price - pos["avg_cost"]) * pos["qty"]
+                # 해외 종목도 원화 평단가(매수 시점 환율 기준) 대비 오늘 환율로 환산한
+                # 현재가로 그대로 계산 - 매수 이후 환율 변동분도 실제 원화 손익에
+                # 포함시키기로 함(사용자 결정: 환차익도 진짜 내 돈이므로 포함).
+                price = price_in_krw(ticker, pos["market"])
+                if price is not None:
+                    unrealized = (price - pos["avg_cost"]) * pos["qty"]
             dividend = dividends_by_ticker.get(ticker, 0.0)
             total = realized + unrealized + dividend
             rows.append(
@@ -1278,14 +1271,11 @@ with tab_dashboard:
         for ticker, pos in positions.items():
             if pos["qty"] <= 0:
                 continue
-            if pos["market"] == "US":
-                # 해외는 원화 환산 없이 달러 그대로 (평단가도 달러 기준으로 추적됨) -
-                # 오늘 환율을 곱해 KRW로 바꾸면 환율 변동분이 섞여 토스 앱 수치와 어긋남
-                price = cached_price(ticker, "US")
-                avg_cost = pos["avg_cost_usd"]
-            else:
-                price = price_lookup.get(ticker)
-                avg_cost = pos["avg_cost"]
+            # 해외 종목도 오늘 환율로 환산한 원화 기준으로 계산 - 매수 이후 환율
+            # 변동분(환차익/환차손)도 실제 원화 손익에 포함 (사용자 결정, 성과분석
+            # 탭·보유기간 탭과 동일한 방식으로 통일).
+            price = price_in_krw(ticker, pos["market"])
+            avg_cost = pos["avg_cost"]
             eval_amount = price * pos["qty"] if price is not None else None
             pnl = (price - avg_cost) * pos["qty"] if price is not None else None
             pnl_pct = (price / avg_cost - 1) * 100 if price is not None and avg_cost else None
@@ -1318,7 +1308,7 @@ with tab_dashboard:
             return entries_sorted
 
         kr_sorted = render_holdings("🇰🇷 국내", holdings_kr)
-        us_sorted = render_holdings("🇺🇸 해외 (USD 기준)", holdings_us)
+        us_sorted = render_holdings("🇺🇸 해외 (원화 환산, 환차익 포함)", holdings_us)
 
         with st.expander("✏️ 비고 작성/수정"):
             # 평가금 내림차순 (위 표와 같은 순서): 국내 먼저, 그다음 해외
@@ -2113,10 +2103,11 @@ with tab_holding:
         f"종목별로 첫 매수일부터 완전히 청산한 날(또는 아직 보유 중이면 오늘)까지의 기간을 보여줍니다. "
         f"{HOLDING_SHORT_DAYS}일 미만은 단타, {HOLDING_SHORT_DAYS}~{HOLDING_LONG_DAYS}일은 스윙, "
         f"{HOLDING_LONG_DAYS}일 이상은 장투로 분류했어요. 한 종목을 완전히 팔았다가 나중에 다시 산 경우는 "
-        "별개의 보유 구간으로 따로 표시됩니다. 수익률은 청산된 구간은 실제 매도 현금흐름 기준(환율 포함), "
-        "보유중인 구간은 환율 변동을 뺀 주식 자체 평가수익률 기준이에요. 연환산 수익률은 보유기간이 다른 "
-        "구간끼리도 공정하게 비교할 수 있게 1년 기준으로 환산한 값인데, 며칠 안 되는 초단타는 값이 "
-        "과장되게 커질 수 있으니 참고만 하세요."
+        "별개의 보유 구간으로 따로 표시됩니다. 수익률/손익금액은 매수 시점 환율 대비 오늘(또는 매도 "
+        "시점) 환율 변동분(환차익/환차손)과 그 구간에 들어온 배당금까지 전부 포함한 실제 원화 기준 "
+        "총수익이에요(성과분석·대시보드와 동일한 기준). 연환산 수익률은 보유기간이 다른 구간끼리도 "
+        "공정하게 비교할 수 있게 1년 기준으로 환산한 값인데, 며칠 안 되는 초단타는 값이 과장되게 커질 "
+        "수 있으니 참고만 하세요."
     )
 
     holding_trades = db.get_trades()
@@ -2131,6 +2122,7 @@ with tab_holding:
         episodes = compute_holding_episodes(
             holding_trades, dt.date.today().isoformat(),
             price_lookup=holding_price_lookup, fx_rate=holding_fx_rate,
+            dividends=db.get_dividends(),
         )
         if not episodes:
             st.info("보유 구간을 계산할 매매 기록이 없습니다.")
