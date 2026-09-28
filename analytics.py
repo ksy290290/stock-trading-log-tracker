@@ -146,8 +146,16 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
     for ticker, tlist in by_ticker.items():
         qty = 0.0
         start_date = None
-        cost_krw = 0.0
-        cost_usd = 0.0
+        # 청산 완료 구간의 수익률은 그 구간에 산 전체 원가(cost_krw_total) 대비
+        # 그 구간에 판 전체 매도대금(proceeds_krw)으로 계산 - 청산 완료란 정의상
+        # 그 구간에 산 걸 전부 팔았다는 뜻이라 1:1로 맞음.
+        # 반면 아직 보유중인 구간은 중간에 일부만 판 적이 있을 수 있어서(예: 재매수
+        # 없이 쭉 사모으다 일부 차익실현), 남은 수량의 원가를 "평단가 x 남은 수량"으로
+        # 다시 계산해야 함 - 평단가법(avg-cost)에서는 일부 매도가 평단가 자체를
+        # 바꾸지 않으므로, compute_positions와 똑같이 평단가를 증분 계산해서 씀.
+        avg_cost_krw = 0.0
+        avg_cost_usd = 0.0
+        cost_krw_total = 0.0
         proceeds_krw = 0.0
         name = tlist[0]["name"]
         market = tlist[0]["market"]
@@ -156,13 +164,21 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
             if t["side"] == "BUY":
                 if qty <= 1e-9:
                     start_date = t["trade_date"]
-                    cost_krw = 0.0
-                    cost_usd = 0.0
+                    avg_cost_krw = 0.0
+                    avg_cost_usd = 0.0
+                    cost_krw_total = 0.0
                     proceeds_krw = 0.0
-                cost_krw += t["quantity"] * t["price"] + (t["fee"] or 0)
+                buy_cost_krw = t["quantity"] * t["price"] + (t["fee"] or 0)
+                new_total_cost_krw = qty * avg_cost_krw + buy_cost_krw
+                cost_krw_total += buy_cost_krw
+                new_total_cost_usd = None
                 if market == "US" and t["fx_rate"]:
-                    cost_usd += t["quantity"] * (t["price"] / t["fx_rate"]) + (t["fee"] or 0) / t["fx_rate"]
+                    buy_cost_usd = t["quantity"] * (t["price"] / t["fx_rate"]) + (t["fee"] or 0) / t["fx_rate"]
+                    new_total_cost_usd = qty * avg_cost_usd + buy_cost_usd
                 qty += t["quantity"]
+                avg_cost_krw = new_total_cost_krw / qty
+                if new_total_cost_usd is not None:
+                    avg_cost_usd = new_total_cost_usd / qty
             else:  # SELL
                 proceeds_krw += t["quantity"] * t["price"] - (t["fee"] or 0) - (t["tax"] or 0)
                 qty -= t["quantity"]
@@ -175,8 +191,8 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
                             "start_date": start_date,
                             "end_date": t["trade_date"],
                             "is_open": False,
-                            "return_pct": (proceeds_krw - cost_krw) / cost_krw if cost_krw else None,
-                            "pnl_krw": proceeds_krw - cost_krw,
+                            "return_pct": (proceeds_krw - cost_krw_total) / cost_krw_total if cost_krw_total else None,
+                            "pnl_krw": proceeds_krw - cost_krw_total,
                         }
                     )
                     qty = 0.0
@@ -187,12 +203,12 @@ def compute_holding_episodes(trades, today_iso, price_lookup=None, fx_rate=None)
             price = price_lookup.get(ticker)
             if price is not None:
                 if market == "US":
-                    if cost_usd and fx_rate:
-                        return_pct = (qty * price - cost_usd) / cost_usd
-                        pnl_krw = (qty * price - cost_usd) * fx_rate
-                elif cost_krw:
-                    return_pct = (qty * price - cost_krw) / cost_krw
-                    pnl_krw = qty * price - cost_krw
+                    if avg_cost_usd and fx_rate:
+                        return_pct = (price - avg_cost_usd) / avg_cost_usd
+                        pnl_krw = (price - avg_cost_usd) * qty * fx_rate
+                elif avg_cost_krw:
+                    return_pct = (price - avg_cost_krw) / avg_cost_krw
+                    pnl_krw = (price - avg_cost_krw) * qty
             episodes.append(
                 {
                     "ticker": ticker,
