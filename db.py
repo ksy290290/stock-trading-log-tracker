@@ -210,6 +210,18 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loan_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pay_date TEXT NOT NULL,
+            interest REAL NOT NULL,     -- 해당 납부일에 낸 이자 (양수, KRW)
+            balance REAL,               -- 추정 평균 잔액 (마이너스통장이라 보통 음수, KRW)
+            note TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -378,5 +390,41 @@ def set_holding_note(ticker, market, note):
                                               updated_at = excluded.updated_at""",
         (ticker, market, note, datetime.now().isoformat()),
     )
+    conn.commit()
+    conn.close()
+
+
+def add_loan_log(pay_date, interest, balance, note=None):
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO loan_log (pay_date, interest, balance, note, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (pay_date, interest, balance, note, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_loan_logs():
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM loan_log ORDER BY pay_date DESC, id DESC").fetchall()
+    conn.close()
+    return rows
+
+
+def update_loan_log(loan_log_id, pay_date, interest, balance, note=None):
+    conn = get_conn()
+    conn.execute(
+        """UPDATE loan_log SET pay_date = ?, interest = ?, balance = ?, note = ?
+           WHERE id = ?""",
+        (pay_date, interest, balance, note, loan_log_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_loan_log(loan_log_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM loan_log WHERE id = ?", (loan_log_id,))
     conn.commit()
     conn.close()

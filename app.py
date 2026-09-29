@@ -216,6 +216,11 @@ st.markdown(
         font-size: 0.64rem;
         font-weight: 700;
     }
+    .cal-tot-loan {
+        color: #EF4444;
+        font-size: 0.64rem;
+        font-weight: 700;
+    }
     .cal-event strong {
         font-weight: 800;
     }
@@ -420,7 +425,7 @@ st.markdown(
             font-size: 0.78rem;
             padding: 5px;
         }
-        .cal-tot-buy, .cal-tot-sell, .cal-tot-div {
+        .cal-tot-buy, .cal-tot-sell, .cal-tot-div, .cal-tot-loan {
             font-size: 0.7rem;
         }
         .cal-event {
@@ -1090,10 +1095,10 @@ if _detect_mobile():
 
 (
     tab_heatmap, tab_dashboard, tab_calendar, tab_trades, tab_dividends, tab_targets, tab_journal, tab_perf,
-    tab_holding, tab_ai,
+    tab_holding, tab_loan, tab_ai,
 ) = st.tabs(
     ["🔥 히트맵", "📊 대시보드", "📅 캘린더", "📝 매매일지", "💰 배당금", "🎯 목표가/손절가", "📓 노트", "📈 성과분석",
-     "⏳ 보유기간", "🤖 AI 인사이트"]
+     "⏳ 보유기간", "🏦 LOAN_LOG", "🤖 AI 인사이트"]
 )
 
 
@@ -1236,10 +1241,9 @@ with tab_dashboard:
         st.info("아직 매매 기록이 없습니다. '매매일지' 탭에서 첫 거래를 입력해보세요.")
     else:
         positions = compute_positions(trades)
-        # 종목 자체 통화 기준 가격(국내는 원화, 해외는 달러) - 미실현손익 합계에서
-        # 해외 종목을 오늘 환율로 환산한 값을 매수시점 환율 기준 평단가와 바로 빼면
-        # 환차 변동이 섞여버리므로(위 compute_perf_rows와 동일한 문제), total_unrealized_pnl이
-        # 내부적으로 avg_cost_usd + 환율을 따로 적용하도록 통화 그대로 넘긴다.
+        # 종목 자체 통화 기준 가격(국내는 원화, 해외는 달러) - 해외 종목은 오늘
+        # 환율로 환산해서 원화 평단가(매수 시점 환율 기준)와 비교하므로, 매수 이후
+        # 환율 변동(환차익/환차손)도 실제 원화 손익에 포함된다(사용자 결정).
         price_lookup = {
             ticker: cached_price(ticker, pos["market"])
             for ticker, pos in positions.items()
@@ -1249,20 +1253,26 @@ with tab_dashboard:
         unrealized = total_unrealized_pnl(positions, price_lookup, fx_rate=cached_usdkrw())
         wr = win_rate(positions)
         total_dividends = sum(d["amount"] for d in db.get_dividends())
+        total_loan_interest = sum(l["interest"] for l in db.get_loan_logs())
+        # 주식 매수에 마이너스통장을 끌어다 썼으므로, 그 이자는 실제 매매로 번 돈에서
+        # 까먹는 진짜 비용 - 실현손익에서 차감해서 순수익을 보여줌 (사용자 결정).
+        realized_net = realized - total_loan_interest
         principal = sum(
             pos["avg_cost"] * pos["qty"] for pos in positions.values() if pos["qty"] > 0
         )
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1:
             metric_card("투자금액 (원금)", f"{principal:,.0f}", "#3182F6")
         with c2:
             metric_card("평가 손익 (미실현)", f"{unrealized:,.0f}", "#F59E0B")
         with c3:
-            metric_card("실현 손익", f"{realized:,.0f}", "#16A34A")
+            metric_card("실현 손익", f"{realized_net:,.0f}", "#16A34A")
         with c4:
             metric_card("누적 배당금", f"{total_dividends:,.0f}", "#F04452")
         with c5:
+            metric_card("누적 마통 이자", f"-{total_loan_interest:,.0f}", "#EF4444")
+        with c6:
             metric_card("승률 (매도 기준)", f"{wr:.0%}" if wr is not None else "-", "#8B5CF6")
 
         st.subheader("보유 종목")
@@ -1366,9 +1376,12 @@ with tab_calendar:
 
     # 매매: 같은 날짜/티커/매수·매도를 묶어서 이벤트 하나로 (하루 여러 번 자동매수 등으로 인한 난립 방지)
     trade_groups = defaultdict(lambda: {"qty": 0.0, "amount": 0.0, "name": None})
-    # 날짜별 매수/매도/배당 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
+    # 날짜별 매수/매도/배당/마통이자 합계 (원화는 항상 있음, 달러는 해외 거래에 fx_rate가 있을 때만)
     day_totals = defaultdict(
-        lambda: {"buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0, "div_krw": 0.0}
+        lambda: {
+            "buy_krw": 0.0, "sell_krw": 0.0, "buy_usd": 0.0, "sell_usd": 0.0,
+            "div_krw": 0.0, "loan_krw": 0.0,
+        }
     )
     for t in cal_trades:
         key = (t["trade_date"], t["ticker"], t["side"])
@@ -1394,6 +1407,12 @@ with tab_calendar:
     for (cdate, cticker), g in div_groups.items():
         events_by_date[cdate].append((f"배당 {g['name']} {fmt(g['amount'])}원", "#16A34A", g["amount"]))
         day_totals[cdate]["div_krw"] += g["amount"]
+
+    # 마통 이자 (납부일별)
+    cal_loan_logs = db.get_loan_logs()
+    for l in cal_loan_logs:
+        events_by_date[l["pay_date"]].append((f"마통 이자 {fmt(l['interest'])}원", "#EF4444", l["interest"]))
+        day_totals[l["pay_date"]]["loan_krw"] += l["interest"]
 
     # 실적발표 (해외 보유종목만 - yfinance 제공, 국내는 자동 조회 소스가 마땅치 않음)
     cal_positions = compute_positions(cal_trades) if cal_trades else {}
@@ -1473,6 +1492,8 @@ with tab_calendar:
                     lines.append(f'<span class="cal-tot-sell"><strong>매도</strong> {fmt(dtot["sell_krw"])}{usd}</span>')
                 if dtot["div_krw"] > 0:
                     lines.append(f'<span class="cal-tot-div"><strong>배당</strong> {fmt(dtot["div_krw"])}</span>')
+                if dtot["loan_krw"] > 0:
+                    lines.append(f'<span class="cal-tot-loan"><strong>마통이자</strong> -{fmt(dtot["loan_krw"])}</span>')
                 tot_html = "".join(f"<div>{line}</div>" for line in lines)
 
             _rows.append(
@@ -1551,7 +1572,12 @@ with tab_calendar:
         pct_txt = f" ({pct:+.1f}%)" if pct is not None else ""
         sell_pnl_lines.append(f"{v['name']} {v['pnl']:+,.0f}{pct_txt}")
 
-    mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+    # 이번 달 마통 이자 납부 합계
+    month_loan_interest = sum(
+        l["interest"] for l in cal_loan_logs if l["pay_date"].startswith(month_prefix)
+    )
+
+    mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
     with mcol1:
         buy_val = fmt(month_buy_krw) + (f" (${month_buy_usd:,.0f})" if month_buy_usd else "")
         metric_card("매수", buy_val, "#3182F6", sublines=buy_ticker_lines)
@@ -1562,9 +1588,11 @@ with tab_calendar:
         metric_card("판매 수익", sell_pnl_val, "#8B5CF6", sublines=sell_pnl_lines)
     with mcol4:
         metric_card("배당금", fmt(month_div_krw), "#16A34A", sublines=div_ticker_lines)
+    with mcol5:
+        metric_card("마통 이자", f"-{fmt(month_loan_interest)}" if month_loan_interest else "0", "#EF4444")
 
     st.caption(
-        "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
+        "🔵 매수 · 🔴 매도 · 🟢 배당 · 🟠 마통 이자 · 🟣 실적발표(해외 보유종목만, yfinance 기준). "
         "국내 종목 실적발표는 자동 조회 소스가 없어 표시되지 않습니다. '+N건 더'를 클릭하면 전체 내역이 펼쳐집니다 "
         "(더블클릭은 Streamlit 보안 정책상 지원되지 않아 클릭으로 대체했습니다)."
     )
@@ -2344,6 +2372,79 @@ with tab_holding:
                 ]
             )
             render_table(table_df, scroll=True)
+
+# ---------------------------------------------------------------------------
+# LOAN_LOG (주식 매수에 쓴 마이너스통장 이자/잔액 관리)
+# ---------------------------------------------------------------------------
+with tab_loan:
+    st.subheader("LOAN_LOG 기록 추가")
+    st.caption(
+        "주식 매수에 마이너스통장을 끌어다 쓰면서 이자 비용도 같이 관리하기 위한 탭이에요. "
+        "여기 기록한 이자는 대시보드 '실현손익'에서 자동으로 차감되고(누적 마통 이자는 별도 카드로 "
+        "표시), 캘린더에도 납부일에 표시됩니다."
+    )
+
+    with st.form("loan_log_form", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
+        l_date = col1.date_input("납부일", value=dt.date.today(), key="l_date")
+        l_interest = col2.number_input("이자 (원)", min_value=0.0, step=1000.0)
+        l_balance = col3.number_input("추정 평균 잔액 (원, 마이너스통장이면 음수로)", step=10000.0, value=0.0)
+        l_note = st.text_input("메모 (선택)")
+        submitted = st.form_submit_button("LOAN_LOG 추가")
+        if submitted:
+            if l_interest <= 0:
+                st.error("이자는 필수입니다.")
+            else:
+                db.add_loan_log(l_date.isoformat(), l_interest, l_balance, l_note.strip() or None)
+                st.success("LOAN_LOG 기록을 추가했습니다.")
+                st.rerun()
+
+    st.subheader("LOAN_LOG 내역")
+    loan_logs = db.get_loan_logs()
+    if loan_logs:
+        total_interest = sum(l["interest"] for l in loan_logs)
+        st.caption(f"누적 이자: {total_interest:,.0f}원")
+
+        ldf = pd.DataFrame([dict(l) for l in loan_logs])
+        display_ldf = ldf.rename(
+            columns={"pay_date": "납부일", "interest": "이자", "balance": "추정 평균 잔액", "note": "메모"}
+        )
+        display_ldf["이자"] = display_ldf["이자"].apply(fmt)
+        display_ldf["추정 평균 잔액"] = display_ldf["추정 평균 잔액"].apply(fmt_signed)
+        render_table(display_ldf[["id", "납부일", "이자", "추정 평균 잔액", "메모"]], scroll=True)
+
+        del_loan_id = st.number_input("삭제할 LOAN_LOG 기록 ID", min_value=0, step=1, value=0, key="del_loan_id")
+        if st.button("선택한 LOAN_LOG ID 삭제") and del_loan_id > 0:
+            db.delete_loan_log(int(del_loan_id))
+            st.success(f"ID {del_loan_id} 삭제 완료")
+            st.rerun()
+
+        st.markdown("**LOAN_LOG 기록 수정**")
+        edit_loan_id = st.number_input("수정할 LOAN_LOG 기록 ID", min_value=0, step=1, value=0, key="edit_loan_id")
+        if edit_loan_id > 0:
+            l_target = next((l for l in loan_logs if l["id"] == int(edit_loan_id)), None)
+            if l_target is None:
+                st.warning(f"ID {int(edit_loan_id)} 기록을 찾을 수 없습니다.")
+            else:
+                with st.form(f"edit_loan_form_{int(edit_loan_id)}"):
+                    el_date = st.date_input("납부일", value=dt.date.fromisoformat(l_target["pay_date"]))
+                    el_interest = st.number_input(
+                        "이자 (원)", min_value=0.0, value=float(l_target["interest"]), step=1000.0
+                    )
+                    el_balance = st.number_input(
+                        "추정 평균 잔액 (원)", value=float(l_target["balance"] or 0), step=10000.0
+                    )
+                    el_note = st.text_input("메모", value=l_target["note"] or "")
+                    save_loan = st.form_submit_button("수정 저장")
+                    if save_loan:
+                        db.update_loan_log(
+                            int(edit_loan_id), el_date.isoformat(), el_interest, el_balance,
+                            el_note.strip() or None,
+                        )
+                        st.success(f"ID {int(edit_loan_id)} 수정 완료")
+                        st.rerun()
+    else:
+        st.caption("기록이 없습니다.")
 
 # ---------------------------------------------------------------------------
 # AI 인사이트 (Claude가 조사해서 저장한 뉴스/공시/리서치)
