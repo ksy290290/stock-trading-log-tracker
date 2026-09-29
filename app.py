@@ -1740,7 +1740,9 @@ with tab_dividends:
         d_amount = col4.number_input(f"입금액 (세후 실수령액, {d_currency})", min_value=0.0, step=100.0)
         d_tax = col5.number_input(f"원천징수세액 (선택, {d_currency})", min_value=0.0, step=100.0, value=0.0)
         d_date = col6.date_input("입금일", value=dt.date.today(), key="d_date")
-        d_quantity = st.number_input("입금 시점 보유 수량 (선택)", min_value=0.0, step=1.0, value=0.0)
+        col7, col8 = st.columns(2)
+        d_quantity = col7.number_input("입금 시점 보유 수량 (선택)", min_value=0.0, step=1.0, value=0.0)
+        d_per_share = col8.number_input(f"1주당 배당금 (선택, {d_currency})", min_value=0.0, step=0.01, value=0.0)
 
         d_note = st.text_input("메모 (선택)")
         submitted = st.form_submit_button("배당금 추가")
@@ -1749,11 +1751,11 @@ with tab_dividends:
                 st.error("티커와 입금액은 필수입니다.")
             else:
                 fx_rate = None
-                amount_krw, tax_krw = d_amount, d_tax
+                amount_krw, tax_krw, per_share_krw = d_amount, d_tax, d_per_share
                 if d_market == "US":
                     fx_rate = cached_usdkrw()
                     if fx_rate:
-                        amount_krw, tax_krw = d_amount * fx_rate, d_tax * fx_rate
+                        amount_krw, tax_krw, per_share_krw = d_amount * fx_rate, d_tax * fx_rate, d_per_share * fx_rate
                 db.add_dividend(
                     d_ticker.strip().upper() if d_market == "US" else d_ticker.strip(),
                     d_name.strip() or None,
@@ -1764,6 +1766,7 @@ with tab_dividends:
                     d_note.strip() or None,
                     fx_rate,
                     d_quantity if d_quantity > 0 else None,
+                    per_share_krw if d_per_share > 0 else None,
                 )
                 st.success("배당금 기록을 추가했습니다.")
                 st.rerun()
@@ -1784,8 +1787,18 @@ with tab_dividends:
         display_df["amount"] = display_df.apply(_amount_with_usd, axis=1)
         display_df["tax"] = display_df["tax"].apply(fmt)
         display_df["quantity"] = display_df["quantity"].apply(lambda q: fmt_qty(q) if q else "-")
+
+        def _per_share_with_usd(row):
+            if not row.get("per_share"):
+                return "-"
+            text = fmt(row["per_share"])
+            if row["market"] == market_label("US") and row.get("fx_rate"):
+                text += f" (${row['per_share'] / row['fx_rate']:,.2f})"
+            return text
+
+        display_df["per_share"] = display_df.apply(_per_share_with_usd, axis=1)
         render_table(
-            display_df[["id", "pay_date", "market", "ticker", "name", "quantity", "amount", "tax", "note"]],
+            display_df[["id", "pay_date", "market", "ticker", "name", "quantity", "per_share", "amount", "tax", "note"]],
             scroll=True,
         )
         del_div_id = st.number_input("삭제할 배당 기록 ID", min_value=0, step=1, value=0, key="del_div_id")
@@ -1806,8 +1819,10 @@ with tab_dividends:
                 if d_target["market"] == "US" and d_target["fx_rate"]:
                     disp_amount = d_target["amount"] / d_target["fx_rate"]
                     disp_tax = (d_target["tax"] or 0) / d_target["fx_rate"]
+                    disp_per_share = (d_target["per_share"] or 0) / d_target["fx_rate"]
                 else:
                     disp_amount, disp_tax = d_target["amount"], d_target["tax"] or 0
+                    disp_per_share = d_target["per_share"] or 0
                 with st.form(f"edit_dividend_form_{int(edit_div_id)}"):
                     ed_ticker = st.text_input("티커/종목코드", value=d_target["ticker"])
                     ed_name = st.text_input("종목명", value=d_target["name"] or "")
@@ -1819,20 +1834,27 @@ with tab_dividends:
                         f"원천징수세액 ({ed_currency})", min_value=0.0, value=float(disp_tax), step=100.0
                     )
                     ed_date = ecol3.date_input("입금일", value=dt.date.fromisoformat(d_target["pay_date"]))
-                    ed_quantity = st.number_input(
+                    ecol4, ecol5 = st.columns(2)
+                    ed_quantity = ecol4.number_input(
                         "입금 시점 보유 수량 (선택)", min_value=0.0, step=1.0,
                         value=float(d_target["quantity"] or 0),
+                    )
+                    ed_per_share = ecol5.number_input(
+                        f"1주당 배당금 (선택, {ed_currency})", min_value=0.0, step=0.01,
+                        value=float(disp_per_share),
                     )
                     ed_note = st.text_input("메모", value=d_target["note"] or "")
                     save_div = st.form_submit_button("수정 저장")
                     if save_div:
                         ed_market = d_target["market"]
                         fx_rate = None
-                        amount_krw, tax_krw = ed_amount, ed_tax
+                        amount_krw, tax_krw, per_share_krw = ed_amount, ed_tax, ed_per_share
                         if ed_market == "US":
                             fx_rate = cached_usdkrw()
                             if fx_rate:
-                                amount_krw, tax_krw = ed_amount * fx_rate, ed_tax * fx_rate
+                                amount_krw, tax_krw, per_share_krw = (
+                                    ed_amount * fx_rate, ed_tax * fx_rate, ed_per_share * fx_rate,
+                                )
                         db.update_dividend(
                             int(edit_div_id),
                             ed_ticker.strip().upper() if ed_market == "US" else ed_ticker.strip(),
@@ -1844,6 +1866,7 @@ with tab_dividends:
                             ed_note.strip() or None,
                             fx_rate,
                             ed_quantity if ed_quantity > 0 else None,
+                            per_share_krw if ed_per_share > 0 else None,
                         )
                         st.success(f"ID {int(edit_div_id)} 수정 완료")
                         st.rerun()

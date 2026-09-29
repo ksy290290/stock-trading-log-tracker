@@ -198,6 +198,8 @@ def init_db():
         cur.execute("ALTER TABLE dividends ADD COLUMN fx_rate REAL")
     if "quantity" not in existing_div_cols:
         cur.execute("ALTER TABLE dividends ADD COLUMN quantity REAL")  # 배당 입금 시점 보유 수량 (선택)
+    if "per_share" not in existing_div_cols:
+        cur.execute("ALTER TABLE dividends ADD COLUMN per_share REAL")  # 1주당 배당금, 항상 KRW 기준 (선택)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS holding_notes (
@@ -313,24 +315,24 @@ def get_journal(category=None):
     return rows
 
 
-def add_dividend(ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None):
+def add_dividend(ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None, per_share=None):
     conn = get_conn()
     conn.execute(
-        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, datetime.now().isoformat()),
+        """INSERT INTO dividends (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, per_share, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, per_share, datetime.now().isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def update_dividend(dividend_id, ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None):
+def update_dividend(dividend_id, ticker, name, market, pay_date, amount, tax, note, fx_rate=None, quantity=None, per_share=None):
     conn = get_conn()
     conn.execute(
         """UPDATE dividends SET ticker = ?, name = ?, market = ?, pay_date = ?, amount = ?,
-                                 tax = ?, fx_rate = ?, note = ?, quantity = ?
+                                 tax = ?, fx_rate = ?, note = ?, quantity = ?, per_share = ?
            WHERE id = ?""",
-        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, dividend_id),
+        (ticker, name, market, pay_date, amount, tax, fx_rate, note, quantity, per_share, dividend_id),
     )
     conn.commit()
     conn.close()
