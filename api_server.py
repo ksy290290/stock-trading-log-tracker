@@ -168,9 +168,13 @@ def get_positions(_: None = Depends(require_api_key)):
 @app.get("/analytics/summary")
 def get_summary(_: None = Depends(require_api_key)):
     positions, price_lookup, fx_rate = _positions_with_prices()
+    total_loan_interest = sum(l["interest"] for l in db.get_loan_logs())
+    realized = analytics.total_realized_pnl(positions)
     return {
         "win_rate": analytics.win_rate(positions),
-        "total_realized_pnl": analytics.total_realized_pnl(positions),
+        # 주식 매수에 마이너스통장을 끌어다 쓴 이자를 차감한 순수 실현손익 (대시보드와 동일 기준).
+        "total_realized_pnl": realized - total_loan_interest,
         "total_unrealized_pnl": analytics.total_unrealized_pnl(positions, price_lookup, fx_rate=fx_rate),
+        "total_loan_interest": total_loan_interest,
         "trade_count": len(db.get_trades()),
     }
