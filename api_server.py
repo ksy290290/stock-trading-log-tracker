@@ -5,8 +5,8 @@
 사용 중이면(TURSO_DATABASE_URL/TURSO_AUTH_TOKEN 환경변수) db.py가 자동으로
 그쪽에 붙으므로, 이 API 서버와 기존 Streamlit 앱이 같은 데이터를 공유한다.
 
-MVP 범위: 매매일지(trades) CRUD + 성과분석(positions/summary).
-배당금/목표가/노트는 다음 단계에서 추가.
+범위: 매매일지(trades) CRUD + 배당금(dividends) CRUD + 성과분석(positions/summary).
+목표가/노트는 다음 단계에서 추가.
 
 실행: uvicorn api_server:app --host 0.0.0.0 --port 8000
 """
@@ -111,6 +111,55 @@ def edit_trade(trade_id: int, trade: TradeIn, _: None = Depends(require_api_key)
 @app.delete("/trades/{trade_id}")
 def remove_trade(trade_id: int, _: None = Depends(require_api_key)):
     db.delete_trade(trade_id)
+    return {"status": "ok"}
+
+
+class DividendIn(BaseModel):
+    ticker: str
+    name: Optional[str] = None
+    market: str  # 'KR' or 'US'
+    pay_date: str
+    amount: float  # 세후 실수령액, 항상 KRW 기준 (해외 배당도 원화로 환산해서 넣을 것)
+    tax: float = 0  # 항상 KRW 기준
+    fx_rate: Optional[float] = None  # 해외 배당 입금 시점 원/달러 환율 (국내는 생략)
+    quantity: Optional[float] = None  # 입금 시점 보유 수량
+    per_share: Optional[float] = None  # 1주당 배당금, 항상 KRW 기준
+    note: Optional[str] = None
+
+
+class DividendOut(DividendIn):
+    id: int
+    created_at: str
+
+
+@app.get("/dividends", response_model=list[DividendOut])
+def list_dividends(_: None = Depends(require_api_key)):
+    return [_row_to_dict(r) for r in db.get_dividends()]
+
+
+@app.post("/dividends", status_code=201)
+def create_dividend(dividend: DividendIn, _: None = Depends(require_api_key)):
+    db.add_dividend(
+        dividend.ticker, dividend.name, dividend.market, dividend.pay_date,
+        dividend.amount, dividend.tax, dividend.note, fx_rate=dividend.fx_rate,
+        quantity=dividend.quantity, per_share=dividend.per_share,
+    )
+    return {"status": "ok"}
+
+
+@app.put("/dividends/{dividend_id}")
+def edit_dividend(dividend_id: int, dividend: DividendIn, _: None = Depends(require_api_key)):
+    db.update_dividend(
+        dividend_id, dividend.ticker, dividend.name, dividend.market, dividend.pay_date,
+        dividend.amount, dividend.tax, dividend.note, fx_rate=dividend.fx_rate,
+        quantity=dividend.quantity, per_share=dividend.per_share,
+    )
+    return {"status": "ok"}
+
+
+@app.delete("/dividends/{dividend_id}")
+def remove_dividend(dividend_id: int, _: None = Depends(require_api_key)):
+    db.delete_dividend(dividend_id)
     return {"status": "ok"}
 
 
